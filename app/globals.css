@@ -1,0 +1,292 @@
+@import "tailwindcss";
+
+:root {
+  /* Calm, warm-paper palette */
+  --canvas: #f7f5f1;
+  --ink: #3a3733;
+  --ink-soft: #6f6a62;
+  --ink-faint: #a8a29a;
+  --line: #e4e0d8;
+  --panel: rgba(253, 252, 250, 0.92);
+  --accent: #7d8b74; /* muted sage — indicator / focus */
+
+  --shadow-rest:
+    0 1px 3px rgba(60, 50, 40, 0.1), 0 4px 12px rgba(60, 50, 40, 0.07);
+  --shadow-lift:
+    0 10px 28px rgba(60, 50, 40, 0.2), 0 2px 8px rgba(60, 50, 40, 0.12);
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ————— Part card lift choreography —————
+   While lifted, the transform is owned entirely by the drag rAF loop
+   (velocity tilt + lag + eased pickup, written inline); the class carries
+   only the shadow. The loop suspends the transform transition for the
+   duration of the drag and restores it on drop so the tilt relaxes back
+   through this 180ms ease. */
+.part-inner {
+  box-shadow: var(--shadow-rest);
+  transition:
+    transform 180ms cubic-bezier(0.33, 1, 0.68, 1),
+    box-shadow 180ms cubic-bezier(0.33, 1, 0.68, 1);
+  will-change: transform, box-shadow;
+}
+.part-inner.lifted {
+  box-shadow: var(--shadow-lift);
+}
+
+/* ————— Lift target indicator ————— */
+@keyframes indicator-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.16);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.indicator-pop {
+  animation: indicator-pop 180ms cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+/* The anchor the drop will land on breathes softly — a calm outward
+   pulse, restrained accent, never alarm-like. The parent element owns
+   position + visibility (written per frame by the drag loop). */
+@keyframes anchor-pulse {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.75;
+  }
+  75% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+.anchor-pulse {
+  animation: anchor-pulse 1150ms cubic-bezier(0.25, 0.7, 0.4, 1) infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fade-in {
+  animation: fade-in 150ms ease-out both;
+}
+
+/* Leader line fades in at lift start (from-only keyframe animates to the
+   path's own opacity attribute). */
+@keyframes leader-in {
+  from {
+    opacity: 0;
+  }
+}
+.leader-line {
+  animation: leader-in 150ms ease-out;
+}
+
+/* ————— Range slider (body size) ————— */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 2.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(60, 50, 40, 0.25);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 2.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(60, 50, 40, 0.25);
+}
+@media (pointer: coarse) {
+  input[type="range"]::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+    margin-top: -8px;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 15px;
+    height: 15px;
+  }
+}
+
+/* ————— React Flow refinements ————— */
+.react-flow__pane {
+  cursor: default;
+}
+.react-flow__pane.dragging {
+  cursor: grabbing;
+}
+.react-flow__node {
+  cursor: grab;
+}
+.react-flow__node.dragging {
+  cursor: grabbing;
+}
+.react-flow__attribution {
+  background: transparent;
+  color: var(--ink-faint);
+}
+
+/* Connection source dots: 28px touch hit area, 11px visual dot via
+   ::after. The compound selector out-specifies React Flow's own handle
+   rules, which load after this file. */
+.part-source-handle.react-flow__handle {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.part-source-handle.react-flow__handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-sizing: border-box;
+}
+.react-flow__node:hover .part-source-handle,
+.react-flow__node.selected .part-source-handle,
+.react-flow__node.connectingfrom .part-source-handle {
+  opacity: 1;
+}
+/* Invisible handles must never swallow a card grab. */
+.react-flow__node:not(:hover):not(.selected) .part-source-handle {
+  pointer-events: none;
+}
+
+/* NodeResizer styling — quiet, small */
+.react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 1.5px solid var(--accent);
+}
+.react-flow__resize-control.line {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* ————— Drop landing: card pop + anchor ripple —————
+   An impact squash, not a grow: the card has just glided down onto the
+   anchor (the settle tween relaxes the lift over the glide), so at
+   touchdown it compresses wide-and-flat, rebounds a hair past rest,
+   and settles. Fired at touchdown — never at release. */
+@keyframes drop-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.045, 0.955);
+  }
+  70% {
+    transform: scale(0.99, 1.02);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.part-inner.drop-pop {
+  animation: drop-pop 240ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+@keyframes drop-ripple {
+  0% {
+    transform: translate(-50%, -50%) scale(0.22);
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+.drop-ripple {
+  width: 64px;
+  height: 64px;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  animation: drop-ripple 560ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ————— Reduced motion —————
+   The drag focus assist already opts out (handled in JS); quiet the
+   decorative animations too. */
+@media (prefers-reduced-motion: reduce) {
+  .indicator-pop,
+  .fade-in,
+  .leader-line,
+  .part-inner.drop-pop {
+    animation: none;
+  }
+  .drop-ripple {
+    animation: none;
+    opacity: 0;
+  }
+  .anchor-pulse {
+    animation: none;
+    opacity: 0.55;
+  }
+  .part-inner {
+    transition: box-shadow 120ms ease;
+  }
+}
