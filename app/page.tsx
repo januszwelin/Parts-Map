@@ -107,25 +107,28 @@ const CENTER_BLEND_MS = 140;
  *  anchor dots near the pointer brighten, distant ones stay faint. */
 const SPOT_R_FRAC = 0.13;
 
-/** Drag focus assist: when the person LINGERS over a dense anchor
- *  cluster (neighbors closer on screen than DENSE_PX at the lift-start
- *  zoom), the camera eases in about the steering point until anchors
- *  are comfortably apart — capped at ASSIST_MAX_REL × the lift-start
- *  zoom and ASSIST_MAX_ABS overall — and eases back on drop.
+/** Drag-follow camera: while a drag steers over (or near) a figure, the
+ *  camera eases in to a comfortable working zoom and keeps the hand in
+ *  the middle of the screen, easing back to the lift-start zoom on drop.
  *
- *  Engagement is hysteretic: it engages after ASSIST_ENGAGE_MS of calm
- *  (speed under ASSIST_ENGAGE_SPD px/s) over dense ground, HOLDS through
- *  any speed while the ground stays dense (adjustment moves never drop
- *  the zoom), and releases only after ASSIST_RELEASE_MS of sparse
- *  ground. The camera glides only while the hand is calm
- *  (ASSIST_GLIDE_SPD) so the world never swims under a moving pointer. */
-const DENSE_PX = 34;
-const ASSIST_MAX_REL = 2.2;
-const ASSIST_MAX_ABS = 2.4;
-const ASSIST_ENGAGE_MS = 180;
-const ASSIST_RELEASE_MS = 300;
-const ASSIST_ENGAGE_SPD = 160; // px/s
-const ASSIST_GLIDE_SPD = 260; // px/s
+ *  The zoom pivots on the steering point (the world under the pointer
+ *  holds still), and a deadzone-band pan drifts the viewport whenever
+ *  the pointer strays outside the middle band — so edge-of-screen drags
+ *  follow continuously (the pan runs on every drag, zoomed or not, and
+ *  replaces React Flow's own edge auto-pan). Engagement is spatially
+ *  hysteretic (a slim pad engages, a wider one releases — no flapping
+ *  along the silhouette's edge). Zoom only deepens while the hand is
+ *  aiming, so a fling across a figure never zooms in; and both glides
+ *  stretch their time constants with hand speed, so the world hangs
+ *  back rather than swimming under a fast pointer. */
+const FOLLOW_ENTER_PAD = 0.12; // figureUnder pad that engages the zoom
+const FOLLOW_EXIT_PAD = 0.26; // …and the wider pad that releases it
+const FOLLOW_GAP_PX = 40; // densest anchors read ≥ this far apart (px)
+const FOLLOW_MIN = 1.45; // working zoom floor
+const FOLLOW_MAX = 2.4; // …and ceiling (desktop)
+const FOLLOW_MAX_PHONE = 1.9; // small screens get a gentler ceiling
+const CENTER_BAND_FRAC = 0.2; // deadzone half-extent, fraction of canvas
+const CENTER_TAU_MS = 240; // recentering-pan time constant
 /** Camera-glide time constant (ms) — frame-rate independent; matches the
  *  old 0.09-per-frame lerp at 60 Hz (no double-speed glide at 120 Hz). */
 const GLIDE_TAU_MS = 177;
@@ -526,6 +529,8 @@ export type Part = {
   /** Explicit card size once resized by hand. */
   w?: number;
   h?: number;
+  /** Optional private note — a few words the person keeps with the part. */
+  note?: string;
 };
 
 export type Arrow = {
@@ -598,6 +603,10 @@ function parseMap(json: string): MapDoc {
           : "rounded",
       w: typeof p.w === "number" ? p.w : undefined,
       h: typeof p.h === "number" ? p.h : undefined,
+      note:
+        typeof p.note === "string" && p.note.trim()
+          ? p.note.trim().slice(0, 500)
+          : undefined,
     };
   });
   const ids = new Set(parts.map((p) => p.id));
@@ -850,16 +859,15 @@ function nearestTarget(
   return best;
 }
 
-/** Distance (flow units at scale 1) from each snappable region's anchor to
- *  its nearest snappable neighbor, per figure. The drag focus assist reads
- *  this: it zooms in exactly when the held anchor's neighbors would sit
- *  closer on screen than a comfortable aiming gap. (Distances are
- *  mirror-invariant, so one map per set suffices.) */
-const NEIGHBOR_GAP: Record<Depth, Record<string, number>> = (() => {
-  const gapsFor = (snappable: RegionDef[]) => {
-    const out: Record<string, number> = {};
+/** The tightest nearest-neighbor anchor gap across both figures (flow
+ *  units at scale 1) — in practice the face rows. The drag-follow zoom
+ *  derives its working zoom from this: deep enough that even the densest
+ *  cluster reads FOLLOW_GAP_PX apart on screen. */
+const MIN_ANCHOR_GAP: number = (() => {
+  let min = Infinity;
+  for (const depth of ["front", "back"] as const) {
+    const snappable = SNAP_SETS[depth];
     for (const r of snappable) {
-      let min = Infinity;
       for (const s of snappable) {
         if (s === r) continue;
         const d = Math.hypot(
@@ -868,11 +876,9 @@ const NEIGHBOR_GAP: Record<Depth, Record<string, number>> = (() => {
         );
         if (d < min) min = d;
       }
-      out[r.key] = min;
     }
-    return out;
-  };
-  return { front: gapsFor(SNAP_SETS.front), back: gapsFor(SNAP_SETS.back) };
+  }
+  return min;
 })();
 
 /** Which figure's bounding box (inflated by `pad`) contains the point.
@@ -1336,6 +1342,21 @@ function useIsPhone(): boolean {
   return phone;
 }
 
+/** Reactive prefers-reduced-motion. The drag loop reads the media query
+ *  per drag; this hook is for render-time choices (e.g. handing edge
+ *  auto-pan back to React Flow when our camera glides are off). */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReduced(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return reduced;
+}
+
 const regionLabel = (key: string) => REGION_BY_KEY[key]?.label ?? key;
 const partIsBack = (p: Part) =>
   !p.offBody && (p.depth === "back" || !!REGION_BY_KEY[p.location]?.isBack);
@@ -1352,12 +1373,12 @@ const SHAPE_RADIUS: Record<Shape, string> = {
 };
 
 type PartNodeType = Node<
-  { part: Part; lifted: boolean; popKey: number },
+  { part: Part; lifted: boolean; popKey: number; revealKey: number },
   "part"
 >;
 
 function PartNode({ id, data, selected, dragging }: NodeProps<PartNodeType>) {
-  const { part, lifted, popKey } = data;
+  const { part, lifted, popKey, revealKey } = data;
   const api = useAppApi();
   const onBackSurface = !part.offBody && partSurface(part) === "back";
   const connectionInProgress = useConnection((c) => c.inProgress);
@@ -1369,6 +1390,9 @@ function PartNode({ id, data, selected, dragging }: NodeProps<PartNodeType>) {
   // replay it.
   const [popPlayed, setPopPlayed] = useState(0);
   const popping = popKey !== 0 && popKey !== popPlayed;
+  // One-shot reveal halo (the list's "where is it?"), same retirement.
+  const [revealPlayed, setRevealPlayed] = useState(0);
+  const revealing = revealKey !== 0 && revealKey !== revealPlayed;
 
   return (
     <div
@@ -1392,9 +1416,10 @@ function PartNode({ id, data, selected, dragging }: NodeProps<PartNodeType>) {
         }}
         className={`part-inner flex h-full w-full items-center justify-center px-4 py-3 text-center leading-snug ${
           lifted ? "lifted" : ""
-        } ${popping ? "drop-pop" : ""}`}
+        } ${popping ? "drop-pop" : ""} ${revealing ? "reveal-glow" : ""}`}
         onAnimationEnd={(e) => {
           if (e.animationName === "drop-pop") setPopPlayed(popKey);
+          if (e.animationName === "reveal-glow") setRevealPlayed(revealKey);
         }}
         style={{
           background: part.color,
@@ -1406,6 +1431,13 @@ function PartNode({ id, data, selected, dragging }: NodeProps<PartNodeType>) {
         }}
       >
         <span className="pointer-events-none break-words">{part.name}</span>
+        {part.note && (
+          <span
+            className="pointer-events-none absolute bottom-1.5 right-2 h-1.5 w-1.5 rounded-full"
+            style={{ background: "var(--ink-faint)", opacity: 0.7 }}
+            aria-hidden
+          />
+        )}
         {onBackSurface && (
           <span
             className="pointer-events-none absolute -top-2 right-2 rounded-full px-1.5 text-[9px] tracking-wide"
@@ -1503,6 +1535,12 @@ function ArrowLabelInput({ id, label }: { id: string; label?: string }) {
   );
 }
 
+/** Air between an arrow's endpoints and the card faces it connects: the
+ *  head ends short of the target so it never tucks under the card, and the
+ *  tail leaves a hint of light at the source for symmetry. */
+const ARROW_GAP = 6;
+const SOURCE_GAP = 2.5;
+
 function FloatingEdge({
   id,
   source,
@@ -1531,8 +1569,12 @@ function FloatingEdge({
     x: tn.internals.positionAbsolute.x + td.w / 2,
     y: tn.internals.positionAbsolute.y + td.h / 2,
   };
-  const sp = rectEdgePoint(sc, sd.w, sd.h, tc);
-  const tp = rectEdgePoint(tc, td.w, td.h, sc);
+  // Terminate on a slightly expanded rect: the node layer paints above the
+  // edge SVG, so a path ending exactly on the border loses the arrowhead
+  // tip under the card. A small breathing gap keeps the full head visible
+  // at any approach angle (flow-space, so it scales with zoom).
+  const sp = rectEdgePoint(sc, sd.w + SOURCE_GAP * 2, sd.h + SOURCE_GAP * 2, tc);
+  const tp = rectEdgePoint(tc, td.w + ARROW_GAP * 2, td.h + ARROW_GAP * 2, sc);
 
   const horizontal = Math.abs(tc.x - sc.x) > Math.abs(tc.y - sc.y);
   const sourcePosition = horizontal
@@ -1665,13 +1707,39 @@ function ConnectionLine({
     curvature: 0.28,
   });
   return (
-    <path
-      d={path}
-      fill="none"
-      stroke="var(--accent)"
-      strokeWidth={2}
-      strokeLinecap="round"
-    />
+    <>
+      {/* Same head geometry as React Flow's ArrowClosed marker, so the
+          in-progress line speaks the committed arrow's language. */}
+      <defs>
+        <marker
+          id="parts-connect-arrow"
+          viewBox="-10 -10 20 20"
+          markerWidth={16}
+          markerHeight={16}
+          markerUnits="strokeWidth"
+          orient="auto"
+          refX={0}
+          refY={0}
+        >
+          <polyline
+            points="-5,-4 0,0 -5,4 -5,-4"
+            fill="var(--accent)"
+            stroke="var(--accent)"
+            strokeWidth={1}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </marker>
+      </defs>
+      <path
+        d={path}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth={2}
+        strokeLinecap="round"
+        markerEnd="url(#parts-connect-arrow)"
+      />
+    </>
   );
 }
 
@@ -2222,6 +2290,7 @@ function NameField({ part, sheet }: { part: Part; sheet?: boolean }) {
       value={text}
       placeholder="name…"
       aria-label="Part name"
+      data-part-name-input
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -2231,6 +2300,45 @@ function NameField({ part, sheet }: { part: Part; sheet?: boolean }) {
         }
         e.stopPropagation();
       }}
+      onPointerDown={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+/** Optional private note (popover + phone sheet). Local draft, committed
+ *  on blur; an emptied field clears the note. */
+function NoteField({ part, sheet }: { part: Part; sheet?: boolean }) {
+  const api = useAppApi();
+  const [text, setText] = useState(part.note ?? "");
+  const [lastKey, setLastKey] = useState(`${part.id}:${part.note ?? ""}`);
+  if (lastKey !== `${part.id}:${part.note ?? ""}`) {
+    setLastKey(`${part.id}:${part.note ?? ""}`);
+    setText(part.note ?? "");
+  }
+  const commit = () => {
+    const n = text.trim().slice(0, 500);
+    if (n !== (part.note ?? "")) {
+      api.updatePart(part.id, { note: n || undefined });
+    }
+  };
+  return (
+    <textarea
+      className={`nodrag nopan w-full resize-none rounded-md px-2 outline-none ${
+        sheet ? "py-2 text-sm" : "py-1 text-xs"
+      }`}
+      style={{
+        background: "rgba(255,255,255,0.7)",
+        border: "1px solid var(--line)",
+        color: "var(--ink)",
+      }}
+      rows={2}
+      maxLength={500}
+      value={text}
+      placeholder="note…"
+      aria-label="Part note"
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     />
   );
@@ -2374,6 +2482,9 @@ function EditPopover({ part }: { part: Part }) {
             {glyph}
           </button>
         ))}
+      </div>
+      <div className="w-full">
+        <NoteField part={part} />
       </div>
       <div className="flex w-full items-center gap-2">
         <LocationField part={part} />
@@ -2595,6 +2706,9 @@ function MobileEditSheet({
         >
           delete
         </button>
+      </div>
+      <div className="pt-2.5">
+        <NoteField part={p} sheet />
       </div>
     </div>
   );
@@ -2868,20 +2982,68 @@ function Toolbar(props: {
   );
 }
 
-function PartsListPanel({
+/** The way home. The canvas is endless and easy to get lost in, so the
+ *  frame-map control is a standalone floating button — always in the same
+ *  corner on both layouts, big enough to hit without looking. */
+function FrameMapButton({ onFrame }: { onFrame: () => void }) {
+  return (
+    <button
+      data-ui-chrome
+      aria-label="Frame the map"
+      title="Frame the map"
+      className="absolute bottom-[calc(76px+env(safe-area-inset-bottom))] right-3 z-20 flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:bottom-10"
+      style={{ ...panelStyle, touchAction: "manipulation" }}
+      onClick={onFrame}
+    >
+      <svg
+        width="17"
+        height="17"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="var(--ink-soft)"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        aria-hidden
+      >
+        <path d="M5.5 1.5H3A1.5 1.5 0 0 0 1.5 3v2.5" />
+        <path d="M10.5 1.5H13A1.5 1.5 0 0 1 14.5 3v2.5" />
+        <path d="M5.5 14.5H3A1.5 1.5 0 0 1 1.5 13v-2.5" />
+        <path d="M10.5 14.5H13a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+      </svg>
+    </button>
+  );
+}
+
+/** The list filter's state — only offered once the list is long enough to
+ *  need it; clears itself whenever the list is put away. */
+function useListQuery(parts: Part[], open: boolean) {
+  const [query, setQuery] = useState("");
+  const [lastOpen, setLastOpen] = useState(open);
+  if (lastOpen !== open) {
+    setLastOpen(open);
+    if (!open) setQuery("");
+  }
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? parts.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          locationDisplay(p).toLowerCase().includes(q),
+      )
+    : parts;
+  return { query, setQuery, shown };
+}
+
+/** The copy/export actions — one set of buttons shared by the desktop
+ *  panel and the phone sheet (the caller provides the wrapping row). */
+function CopyActions({
   parts,
   arrows,
-  open,
-  selectedId,
-  onSelect,
-  onClose,
+  phone,
 }: {
   parts: Part[];
   arrows: Arrow[];
-  open: boolean;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onClose: () => void;
+  phone?: boolean;
 }) {
   const [copied, setCopied] = useState<"list" | "rel" | "flow" | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2893,7 +3055,12 @@ function PartsListPanel({
   const copy = async (kind: "list" | "rel") => {
     const text =
       kind === "list"
-        ? parts.map((p) => `${p.name}\t${locationDisplay(p)}`).join("\n")
+        ? parts
+            .map(
+              (p) =>
+                `${p.name}\t${locationDisplay(p)}${p.note ? `\t${p.note}` : ""}`,
+            )
+            .join("\n")
         : relationshipsText(parts, arrows);
     if (!(await copyText(text))) return;
     flash(kind);
@@ -2902,8 +3069,187 @@ function PartsListPanel({
     if (!(await downloadFlowchartPng(parts, arrows))) return;
     flash("flow");
   };
-  const actionBtn =
-    "rounded-md px-2 py-1 text-[11px] hover:bg-black/5 pointer-coarse:py-2 disabled:opacity-40";
+  const actionBtn = phone
+    ? "rounded-lg px-2.5 py-2 text-xs hover:bg-black/5 disabled:opacity-40"
+    : "rounded-md px-2 py-1 text-[11px] hover:bg-black/5 pointer-coarse:py-2 disabled:opacity-40";
+  return (
+    <>
+      <button
+        className={actionBtn}
+        style={{ color: "var(--ink-soft)" }}
+        onClick={() => copy("list")}
+        disabled={!parts.length}
+      >
+        {copied === "list" ? "copied ✓" : "copy list"}
+      </button>
+      <button
+        className={actionBtn}
+        style={{ color: "var(--ink-soft)" }}
+        onClick={() => copy("rel")}
+        disabled={!arrows.length}
+        title="Copy all arrows as a text flowchart"
+      >
+        {copied === "rel" ? "copied ✓" : "copy relationships"}
+      </button>
+      <button
+        className={actionBtn}
+        style={{ color: "var(--ink-soft)" }}
+        onClick={exportFlow}
+        disabled={!arrows.length}
+        title="Download all arrows as a flowchart image"
+      >
+        {copied === "flow" ? "exported ✓" : "export flowchart"}
+      </button>
+    </>
+  );
+}
+
+/** One list row, two dialects: desktop keeps the inline location editor
+ *  and gains a hover "show on map" affordance; phone is a single
+ *  thumb-sized target with a read-only location line (editing lives in
+ *  the edit sheet). */
+function PartRow({
+  part: p,
+  selected,
+  phone,
+  onTap,
+}: {
+  part: Part;
+  selected: boolean;
+  phone?: boolean;
+  onTap: () => void;
+}) {
+  const noteDot = p.note ? (
+    <span
+      title={p.note}
+      className="h-1 w-1 shrink-0 rounded-full"
+      style={{ background: "var(--ink-faint)", opacity: 0.8 }}
+    />
+  ) : null;
+  const backBadge = partIsBack(p) ? (
+    <span
+      className="shrink-0 rounded-full px-1.5 text-[9px]"
+      style={{
+        border: "1px solid var(--line)",
+        color: "var(--ink-faint)",
+        lineHeight: "13px",
+      }}
+    >
+      back
+    </span>
+  ) : null;
+  const rowBg = selected ? "rgba(125,139,116,0.12)" : "transparent";
+
+  if (phone) {
+    return (
+      <button
+        data-part-row={p.id}
+        className="flex min-h-12 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors active:bg-black/5"
+        style={{ background: rowBg }}
+        onClick={onTap}
+      >
+        <span
+          className="h-3 w-3 shrink-0 rounded-full"
+          style={{
+            background: p.color,
+            border: "1px solid rgba(58,55,51,0.2)",
+          }}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm" style={{ color: "var(--ink)" }}>
+            {p.name}
+          </span>
+          <span
+            className="block truncate text-[11px]"
+            style={{ color: "var(--ink-faint)" }}
+          >
+            {locationDisplay(p)}
+          </span>
+        </span>
+        {noteDot}
+        {backBadge}
+      </button>
+    );
+  }
+  return (
+    <div
+      data-part-row={p.id}
+      className="mb-1 rounded-xl px-2 py-2 transition-colors"
+      style={{ background: rowBg }}
+    >
+      <button
+        className="group flex w-full items-center gap-2 text-left"
+        title="Show on map"
+        onClick={onTap}
+      >
+        <span
+          className="h-2.5 w-2.5 shrink-0 rounded-full"
+          style={{
+            background: p.color,
+            border: "1px solid rgba(58,55,51,0.2)",
+          }}
+        />
+        <span className="truncate text-xs" style={{ color: "var(--ink)" }}>
+          {p.name}
+        </span>
+        {noteDot}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          <svg
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="var(--ink-faint)"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+            aria-hidden
+          >
+            <circle cx="6" cy="6" r="2.6" />
+            <path d="M6 0.8v1.7M6 9.5v1.7M0.8 6h1.7M9.5 6h1.7" />
+          </svg>
+          {backBadge}
+        </span>
+      </button>
+      <div className="mt-1 pl-[18px]">
+        <LocationField part={p} compact />
+      </div>
+    </div>
+  );
+}
+
+function PartsListPanel({
+  parts,
+  arrows,
+  open,
+  selectedId,
+  onSelect,
+  onReveal,
+  onClose,
+}: {
+  parts: Part[];
+  arrows: Arrow[];
+  open: boolean;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  /** Glide the camera to the part (the row's "where is it?"). */
+  onReveal: (id: string) => void;
+  onClose: () => void;
+}) {
+  const { query, setQuery, shown } = useListQuery(parts, open);
+  const reducedMotion = useReducedMotion();
+  // Canvas selection answers "where in my list": keep the selected row
+  // in view while the panel is open.
+  const rowsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open || !selectedId) return;
+    rowsRef.current
+      ?.querySelector(`[data-part-row="${CSS.escape(selectedId)}"]`)
+      ?.scrollIntoView({
+        block: "nearest",
+        behavior: reducedMotion ? "auto" : "smooth",
+      });
+  }, [open, selectedId, reducedMotion]);
   return (
     <div
       data-ui-chrome
@@ -2932,80 +3278,185 @@ function PartsListPanel({
         className="flex flex-wrap items-center gap-1 px-2 py-1"
         style={{ borderBottom: "1px solid var(--line)" }}
       >
-        <button
-          className={actionBtn}
-          style={{ color: "var(--ink-soft)" }}
-          onClick={() => copy("list")}
-          disabled={!parts.length}
-        >
-          {copied === "list" ? "copied ✓" : "copy list"}
-        </button>
-        <button
-          className={actionBtn}
-          style={{ color: "var(--ink-soft)" }}
-          onClick={() => copy("rel")}
-          disabled={!arrows.length}
-          title="Copy all arrows as a text flowchart"
-        >
-          {copied === "rel" ? "copied ✓" : "copy relationships"}
-        </button>
-        <button
-          className={actionBtn}
-          style={{ color: "var(--ink-soft)" }}
-          onClick={exportFlow}
-          disabled={!arrows.length}
-          title="Download all arrows as a flowchart image"
-        >
-          {copied === "flow" ? "exported ✓" : "export flowchart"}
-        </button>
+        <CopyActions parts={parts} arrows={arrows} />
       </div>
-      <div className="flex-1 select-text overflow-y-auto px-2 py-2">
+      {parts.length > 8 && (
+        <div className="px-3 py-1.5" style={{ borderBottom: "1px solid var(--line)" }}>
+          <input
+            className="w-full rounded-md px-2 py-1 text-[11px] outline-none"
+            style={{
+              background: "rgba(255,255,255,0.7)",
+              border: "1px solid var(--line)",
+              color: "var(--ink)",
+            }}
+            value={query}
+            placeholder="find a part…"
+            aria-label="Filter parts"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      )}
+      <div ref={rowsRef} className="flex-1 select-text overflow-y-auto px-2 py-2">
         {parts.length === 0 && (
           <p className="px-2 py-4 text-center text-[11px]" style={{ color: "var(--ink-faint)" }}>
             No parts yet. Name one above, or Import a list.
           </p>
         )}
-        {parts.map((p) => (
-          <div
+        {parts.length > 0 && shown.length === 0 && (
+          <p className="px-2 py-4 text-center text-[11px]" style={{ color: "var(--ink-faint)" }}>
+            Nothing matches “{query.trim()}”.
+          </p>
+        )}
+        {shown.map((p) => (
+          <PartRow
             key={p.id}
-            className="mb-1 rounded-xl px-2 py-1.5 transition-colors"
-            style={{
-              background:
-                p.id === selectedId ? "rgba(125,139,116,0.12)" : "transparent",
+            part={p}
+            selected={p.id === selectedId}
+            onTap={() => {
+              onSelect(p.id);
+              onReveal(p.id);
             }}
-          >
-            <button
-              className="flex w-full items-center gap-2 text-left"
-              onClick={() => onSelect(p.id)}
-            >
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{
-                  background: p.color,
-                  border: "1px solid rgba(58,55,51,0.2)",
-                }}
-              />
-              <span className="truncate text-xs" style={{ color: "var(--ink)" }}>
-                {p.name}
-              </span>
-              {partIsBack(p) && (
-                <span
-                  className="ml-auto shrink-0 rounded-full px-1.5 text-[9px]"
-                  style={{
-                    background: "var(--ink-soft)",
-                    color: "#fff",
-                    lineHeight: "13px",
-                  }}
-                >
-                  back
-                </span>
-              )}
-            </button>
-            <div className="mt-1 pl-[18px]">
-              <LocationField part={p} compact />
-            </div>
-          </div>
+          />
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** Phone parts list — a bottom sheet in the same language as the edit
+ *  sheet (grab strip, swipe to put away). Rows reveal rather than select:
+ *  the sheet slides out of the way so the camera glide and reveal halo
+ *  play unobstructed. */
+function PhonePartsSheet({
+  parts,
+  arrows,
+  open,
+  onReveal,
+  onClose,
+}: {
+  parts: Part[];
+  arrows: Arrow[];
+  open: boolean;
+  onReveal: (id: string) => void;
+  onClose: () => void;
+}) {
+  const { query, setQuery, shown } = useListQuery(parts, open);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ y0: number; dy: number } | null>(null);
+
+  // Swipe-to-dismiss — same gesture as MobileEditSheet: the strip follows
+  // the finger (down only); past the threshold the sheet is put away.
+  const onGrabDown = (e: React.PointerEvent) => {
+    dragRef.current = { y0: e.clientY, dy: 0 };
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    if (sheetRef.current) sheetRef.current.style.transition = "none";
+  };
+  const onGrabMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    d.dy = Math.max(0, e.clientY - d.y0);
+    if (sheetRef.current) {
+      sheetRef.current.style.transform = `translateY(${d.dy}px)`;
+    }
+  };
+  const onGrabUp = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    const s = sheetRef.current;
+    if (!s) return;
+    s.style.transition = "";
+    s.style.transform = "";
+    if (d && d.dy > 80) onClose();
+  };
+
+  return (
+    <div
+      ref={sheetRef}
+      data-ui-chrome
+      className="absolute inset-x-0 bottom-0 z-30 flex flex-col rounded-t-3xl px-4 sm:hidden"
+      style={{
+        ...panelStyle,
+        boxShadow: "0 -8px 32px rgba(60, 50, 40, 0.16)",
+        paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+        maxHeight: "62dvh",
+        transform: open ? "translateY(0)" : "translateY(112%)",
+        transition: "transform 320ms cubic-bezier(0.32, 0.72, 0.22, 1)",
+        touchAction: "manipulation",
+        pointerEvents: open ? "auto" : "none",
+      }}
+    >
+      {/* grab strip — the whole top edge is the swipe handle */}
+      <div
+        className="-mx-4 flex shrink-0 cursor-grab justify-center pb-1 pt-2"
+        style={{ touchAction: "none" }}
+        onPointerDown={onGrabDown}
+        onPointerMove={onGrabMove}
+        onPointerUp={onGrabUp}
+        onPointerCancel={onGrabUp}
+      >
+        <div
+          className="h-1.5 w-10 rounded-full"
+          style={{ background: "var(--line)" }}
+        />
+      </div>
+      <div className="flex shrink-0 items-center justify-between pb-2">
+        <span className="text-sm font-medium" style={{ color: "var(--ink-soft)" }}>
+          Parts ({parts.length})
+        </span>
+        <button
+          aria-label="Close list"
+          className="shrink-0 rounded-full px-3 py-2 text-xs"
+          style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
+          onClick={onClose}
+        >
+          Done
+        </button>
+      </div>
+      {parts.length > 8 && (
+        <div className="shrink-0 pb-2">
+          <input
+            className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+            style={{
+              background: "rgba(255,255,255,0.7)",
+              border: "1px solid var(--line)",
+              color: "var(--ink)",
+            }}
+            value={query}
+            placeholder="find a part…"
+            aria-label="Filter parts"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      )}
+      <div className="-mx-1.5 flex-1 overflow-y-auto overscroll-contain">
+        {parts.length === 0 && (
+          <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
+            No parts yet. Name one below, or Import a list.
+          </p>
+        )}
+        {parts.length > 0 && shown.length === 0 && (
+          <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
+            Nothing matches “{query.trim()}”.
+          </p>
+        )}
+        {shown.map((p) => (
+          <PartRow
+            key={p.id}
+            part={p}
+            phone
+            selected={false}
+            onTap={() => {
+              onReveal(p.id);
+              onClose();
+            }}
+          />
+        ))}
+      </div>
+      <div
+        className="mt-1 flex shrink-0 flex-wrap items-center gap-1 pt-1.5"
+        style={{ borderTop: "1px solid var(--line)" }}
+      >
+        <CopyActions parts={parts} arrows={arrows} phone />
       </div>
     </div>
   );
@@ -3099,7 +3550,7 @@ const isTouchInput = (e: unknown): boolean => {
 
 /** Screen-space pointer position from a drag event (mouse or touch).
  *  The aim gate measures hand speed here, in raw client px — never in
- *  flow space, so the focus-assist zoom's own motion can't masquerade
+ *  flow space, so the drag-follow camera's own motion can't masquerade
  *  as hand motion. */
 const eventClient = (e: unknown): XYPosition | null => {
   const n = (e as { nativeEvent?: unknown } | null)?.nativeEvent ?? e;
@@ -3167,6 +3618,14 @@ function PartsMapApp() {
     id: string;
     pos: XYPosition;
   } | null>(null);
+  // React Flow's DOM measurements, echoed back through the controlled
+  // `nodes` prop so RF considers nodes initialized (else dragging logs
+  // error #015 and useNodesInitialized never turns true). Never written
+  // into `parts` — p.w/p.h means "the user fixed this size" — and never
+  // persisted.
+  const [measuredDims, setMeasuredDims] = useState<
+    ReadonlyMap<string, { w: number; h: number }>
+  >(new Map());
   const [lift, setLift] = useState<{ id: string; isTouch: boolean } | null>(
     null,
   );
@@ -3187,15 +3646,18 @@ function PartsMapApp() {
    *  restore the typed name. */
   const [draft, setDraft] = useState("");
   const isPhone = useIsPhone();
+  const reducedMotion = useReducedMotion();
   const isPhoneRef = useRef(false);
   useEffect(() => {
     isPhoneRef.current = isPhone;
   }, [isPhone]);
-  /** Auto-space feedback: what it just did, with one-tap undo. */
-  const [autoNote, setAutoNote] = useState<{
+  /** Quiet notice pill: transient feedback (auto-space, saved, undo…),
+   *  optionally carrying a single action such as Undo. */
+  const [notice, setNotice] = useState<{
     text: string;
-    prev: number;
     key: number;
+    action?: { label: string; run: () => void };
+    ttlMs?: number;
   } | null>(null);
   /** Session-only sound preference (no persistence by design). */
   const [soundOn, setSoundOn] = useState(true);
@@ -3213,13 +3675,60 @@ function PartsMapApp() {
 
   // ——— refs for the imperative drag loop (zero re-renders per frame) ———
   const partsRef = useRef(parts);
+  const arrowsRef = useRef(arrows);
   const bodyScaleRef = useRef(bodyScale);
   useEffect(() => {
     partsRef.current = parts;
   }, [parts]);
   useEffect(() => {
+    arrowsRef.current = arrows;
+  }, [arrows]);
+  useEffect(() => {
     bodyScaleRef.current = bodyScale;
   }, [bodyScale]);
+
+  /* ——— undo: a bounded snapshot history of the map (parts + arrows).
+         Body scale keeps its own pill Undo; viewport and selection are
+         not history. In-memory only — nothing persists, by design. ——— */
+  const historyRef = useRef<
+    { parts: Part[]; arrows: Arrow[]; label: string; tag: string; at: number }[]
+  >([]);
+  /** Anything worth undoing is also unsaved — the beforeunload guard
+   *  reads this. Cleared on save and on load. */
+  const dirtyRef = useRef(false);
+  /** Snapshot the map BEFORE a mutation. Same-tag pushes within a second
+   *  coalesce (scrubbing color swatches is one undo, not eight). */
+  const pushHistory = useCallback((tag: string, label: string) => {
+    dirtyRef.current = true;
+    const h = historyRef.current;
+    const now = Date.now();
+    const top = h[h.length - 1];
+    if (top && top.tag === tag && now - top.at < 1000) {
+      top.at = now;
+      return;
+    }
+    h.push({
+      parts: partsRef.current,
+      arrows: arrowsRef.current,
+      label,
+      tag,
+      at: now,
+    });
+    if (h.length > 30) h.shift();
+  }, []);
+
+  /* One-time touch hint: the connect dots have no hover to reveal them
+     on touch — name them once, the first time a card is selected. */
+  const linkHintShownRef = useRef(false);
+  const maybeShowLinkHint = useCallback(() => {
+    if (linkHintShownRef.current) return;
+    if (!(window.matchMedia?.("(pointer: coarse)").matches ?? false)) return;
+    linkHintShownRef.current = true;
+    setNotice({
+      text: "Drag a dot on the card’s edge to link parts",
+      key: Date.now(),
+    });
+  }, []);
 
   const liftInfoRef = useRef<{ id: string; isTouch: boolean } | null>(null);
   const cardPosRef = useRef<XYPosition>({ x: 0, y: 0 });
@@ -3258,17 +3767,14 @@ function PartsMapApp() {
   });
   /** Constellation spotlight circle (cx/cy written per frame). */
   const spotRef = useRef<SVGCircleElement | null>(null);
-  /** Drag focus assist: zoom at lift start, reduced-motion opt-out, and
-   *  the hysteretic engage/hold/release state (see the ASSIST_ consts). */
-  const zoomAssistRef = useRef<{
+  /** Drag-follow camera: zoom at lift start, reduced-motion opt-out,
+   *  phone zoom ceiling, and the spatial near/far hysteresis latch
+   *  (see the FOLLOW_ consts). */
+  const followRef = useRef<{
     base: number;
     reduced: boolean;
-    denseSince: number;
-    sparseSince: number;
-    engaged: boolean;
-    /** Zoom held for this engagement — a running max, so it deepens for
-     *  denser sub-clusters but never wobbles down mid-hold. */
-    lockedZoom: number;
+    phone: boolean;
+    near: boolean;
   } | null>(null);
   const restoreRafRef = useRef(0);
   const lastTargetRef = useRef<{ target: LiftTarget; pos: XYPosition } | null>(
@@ -3327,7 +3833,36 @@ function PartsMapApp() {
          a gentle x-glide to the other one (zoom untouched — the pill
          moves the camera, it is not a mode). ——— */
   const [viewSide, setViewSide] = useState<Depth>("front");
-  const jumpRafRef = useRef(0);
+  const glideRafRef = useRef(0);
+  /** Glide the camera to a viewport with an easeOutCubic tween; reduced
+   *  motion jumps straight there. One glide at a time — a new call (or a
+   *  fresh grab) takes the camera over. */
+  const glideViewport = useCallback(
+    (to: Viewport, D = 380) => {
+      cancelAnimationFrame(glideRafRef.current);
+      if (
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+        false
+      ) {
+        rf.setViewport(to);
+        return;
+      }
+      const from = rf.getViewport();
+      const start = performance.now();
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / D);
+        const e = easeOutCubic(t);
+        rf.setViewport({
+          x: from.x + (to.x - from.x) * e,
+          y: from.y + (to.y - from.y) * e,
+          zoom: from.zoom + (to.zoom - from.zoom) * e,
+        });
+        if (t < 1) glideRafRef.current = requestAnimationFrame(step);
+      };
+      glideRafRef.current = requestAnimationFrame(step);
+    },
+    [rf],
+  );
   const onMove = useCallback((_: unknown, vp: Viewport) => {
     const el = wrapperRef.current;
     if (!el) return;
@@ -3340,33 +3875,86 @@ function PartsMapApp() {
       const el = wrapperRef.current;
       if (!el) return;
       const vp = rf.getViewport();
-      const toX =
-        el.clientWidth / 2 -
-        figureCenterX(depth, bodyScaleRef.current) * vp.zoom;
-      cancelAnimationFrame(jumpRafRef.current);
-      if (
-        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
-        false
-      ) {
-        rf.setViewport({ ...vp, x: toX });
-        return;
-      }
-      const fromX = vp.x;
-      const start = performance.now();
-      const D = 380;
-      const step = (now: number) => {
-        const t = Math.min(1, (now - start) / D);
-        rf.setViewport({
-          x: fromX + (toX - fromX) * easeOutCubic(t),
-          y: vp.y,
-          zoom: vp.zoom,
-        });
-        if (t < 1) jumpRafRef.current = requestAnimationFrame(step);
-      };
-      jumpRafRef.current = requestAnimationFrame(step);
+      glideViewport({
+        x:
+          el.clientWidth / 2 -
+          figureCenterX(depth, bodyScaleRef.current) * vp.zoom,
+        y: vp.y,
+        zoom: vp.zoom,
+      });
     },
-    [rf],
+    [rf, glideViewport],
   );
+
+  /** The list's "where is it?" gesture: glide the camera to a part and
+   *  give its card a soft two-breath halo. */
+  const [reveal, setReveal] = useState<{ id: string; key: number } | null>(
+    null,
+  );
+  const revealPart = useCallback(
+    (id: string) => {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const p = partsRef.current.find((q) => q.id === id);
+      if (!p) return;
+      const pos = p.offBody
+        ? p.freePos
+        : derivePositions(partsRef.current, bodyScaleRef.current).get(id);
+      if (!pos) return;
+      const vp = rf.getViewport();
+      // Come no closer than a readable zoom; never zoom out to do it.
+      const zoom = Math.max(vp.zoom, 0.8);
+      glideViewport({
+        x: el.clientWidth / 2 - pos.x * zoom,
+        y: el.clientHeight / 2 - pos.y * zoom,
+        zoom,
+      });
+      setReveal({ id, key: Date.now() });
+    },
+    [rf, glideViewport],
+  );
+
+  /** Frame the whole map: both figures plus any off-body strays. On a
+   *  phone-width screen, frame the front figure (as on first open). */
+  const fitAll = useCallback(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    const s = bodyScaleRef.current;
+    if (w < 640) {
+      const zoom = Math.min(1.1, (h * 0.82) / BODY_H, (w * 0.9) / BODY_W);
+      glideViewport({
+        x: w / 2 - figureCenterX("front", s) * zoom,
+        y: h / 2,
+        zoom,
+      });
+      return;
+    }
+    // The two-figure scene (gap included) scales linearly about flow 0,0.
+    let minX = (-SCENE_W * s) / 2;
+    let maxX = (SCENE_W * s) / 2;
+    let minY = (-BODY_H * s) / 2;
+    let maxY = (BODY_H * s) / 2;
+    for (const p of partsRef.current) {
+      if (!p.offBody) continue;
+      const halfW = (p.w ?? 160) / 2 + 40;
+      const halfH = (p.h ?? 48) / 2 + 40;
+      minX = Math.min(minX, p.freePos.x - halfW);
+      maxX = Math.max(maxX, p.freePos.x + halfW);
+      minY = Math.min(minY, p.freePos.y - halfH);
+      maxY = Math.max(maxY, p.freePos.y + halfH);
+    }
+    const zoom = Math.max(
+      0.15,
+      Math.min(1.1, (w * 0.92) / (maxX - minX), (h * 0.82) / (maxY - minY)),
+    );
+    glideViewport({
+      x: w / 2 - ((minX + maxX) / 2) * zoom,
+      y: h / 2 - ((minY + maxY) / 2) * zoom,
+      zoom,
+    });
+  }, [glideViewport]);
 
   useEffect(
     () => () => {
@@ -3374,7 +3962,7 @@ function PartsMapApp() {
       cancelAnimationFrame(settleRafRef.current);
       cancelAnimationFrame(scaleRafRef.current);
       cancelAnimationFrame(restoreRafRef.current);
-      cancelAnimationFrame(jumpRafRef.current);
+      cancelAnimationFrame(glideRafRef.current);
     },
     [],
   );
@@ -3402,6 +3990,22 @@ function PartsMapApp() {
       setDragOverride(null);
     }
   }, []);
+
+  /** Put the map back the way it was before the last change. Selection
+   *  clears (the change being undone may have been the selected thing);
+   *  auto-space stays disarmed so the restored layout isn't re-judged. */
+  const undo = useCallback(() => {
+    const snap = historyRef.current.pop();
+    if (!snap) return;
+    cancelSettle();
+    setDragOverride(null);
+    setParts(snap.parts);
+    setArrows(snap.arrows);
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+    autoArmedRef.current = false;
+    setNotice({ text: `Undid — ${snap.label}`, key: Date.now() });
+  }, [cancelSettle]);
 
   const settleTween = useCallback(
     (
@@ -3482,6 +4086,7 @@ function PartsMapApp() {
       const from = bodyScaleRef.current;
       const to = Math.min(MAX_SCALE, Math.max(MIN_SCALE, target));
       if (Math.abs(to - from) < 0.005) return;
+      dirtyRef.current = true;
       const el = wrapperRef.current;
       const phone = !!el && el.clientWidth < 640;
       const vp0 = rf.getViewport();
@@ -3513,7 +4118,7 @@ function PartsMapApp() {
     [rf],
   );
 
-  /* ——— the lift rAF loop: steering, sticky magnet, focus assist ——— */
+  /* ——— the lift rAF loop: steering, sticky magnet, drag-follow camera ——— */
   const startLiftLoop = useCallback(() => {
     cancelAnimationFrame(liftRafRef.current);
     const loop = () => {
@@ -3566,7 +4171,7 @@ function PartsMapApp() {
           !ctr.engaged &&
           (ctr.travel > CENTER_TRAVEL_PX ||
             (ctr.seedSnapped &&
-              Math.abs(zoom - (zoomAssistRef.current?.base ?? zoom)) > 0.02))
+              Math.abs(zoom - (followRef.current?.base ?? zoom)) > 0.02))
         ) {
           ctr.engaged = true;
           ctr.start = nowT;
@@ -3679,75 +4284,67 @@ function PartsMapApp() {
       const shown = aim.aiming ? target : MOVING_TARGET;
       setLiftTarget((prev) => (sameLiftTarget(prev, shown) ? prev : shown));
 
-      // ——— focus assist: ease the camera in over dense anchor clusters
-      //     (the head, the face rows) so aiming there is effortless; the
-      //     zoom pivots on the steering point, so the world under the
-      //     pointer holds still. Hysteretic: engage on lingering, HOLD
-      //     through adjustment moves, release only after a sustained
-      //     stretch of sparse ground — and glide only while the hand is
-      //     calm, so the world never swims under a moving pointer. ———
-      const assist = zoomAssistRef.current;
-      if (assist && !assist.reduced) {
-        // Density reads the DISPLAYED target: a fast sweep over the face
-        // is transit ("moving", gap = ∞), so it releases the hold instead
-        // of pinning the zoom while the hand is just passing through.
-        const gap =
-          shown.kind === "region"
-            ? (NEIGHBOR_GAP[shown.depth][shown.key] ?? Infinity) * scale
-            : Infinity;
-        const dense = gap * assist.base < DENSE_PX;
-        if (dense) {
-          assist.sparseSince = 0;
-          if (!assist.denseSince) assist.denseSince = nowT;
-        } else {
-          assist.denseSince = 0;
-          if (!assist.sparseSince) assist.sparseSince = nowT;
+      // ——— drag-follow camera: over (or near) a figure the camera eases
+      //     in to the working zoom, pivoting on the steering point so
+      //     the world under the pointer holds still; and on EVERY drag a
+      //     deadzone-band pan drifts the viewport whenever the pointer
+      //     strays from the middle of the canvas, so edge-of-screen
+      //     drags follow continuously. Both glides stretch with hand
+      //     speed — a fast hand makes the camera hang back. ———
+      const follow = followRef.current;
+      const wrapEl = wrapperRef.current;
+      if (follow && !follow.reduced && ps && wrapEl) {
+        // Spatial hysteresis: a slim pad engages, a wider one releases —
+        // no flapping while skirting the silhouette's edge.
+        follow.near =
+          figureUnder(
+            steer,
+            scale,
+            follow.near ? FOLLOW_EXIT_PAD : FOLLOW_ENTER_PAD,
+          ) !== null;
+        const followZoom = Math.min(
+          Math.max(FOLLOW_GAP_PX / (MIN_ANCHOR_GAP * scale), FOLLOW_MIN),
+          follow.phone ? FOLLOW_MAX_PHONE : FOLLOW_MAX,
+        );
+        // Never zoom below wherever the person already was.
+        const wantZ = follow.near
+          ? Math.max(follow.base, followZoom)
+          : follow.base;
+        const lag = 1 + Math.min(2, aim.spdEma / 500);
+        // Zoom only deepens while aiming (a fling across a figure never
+        // zooms in); easing back out is allowed at any speed.
+        let z = zoom;
+        if (wantZ < zoom || aim.aiming) {
+          z = zoom + (wantZ - zoom) * (1 - Math.exp(-dt / (GLIDE_TAU_MS * lag)));
         }
-
-        if (!assist.engaged) {
-          if (
-            dense &&
-            aim.spdEma < ASSIST_ENGAGE_SPD &&
-            nowT - assist.denseSince > ASSIST_ENGAGE_MS
-          ) {
-            assist.engaged = true;
-            assist.lockedZoom = Math.min(
-              DENSE_PX / gap,
-              assist.base * ASSIST_MAX_REL,
-              ASSIST_MAX_ABS,
-            );
-          }
-        } else {
-          if (dense) {
-            assist.lockedZoom = Math.max(
-              assist.lockedZoom,
-              Math.min(
-                DENSE_PX / gap,
-                assist.base * ASSIST_MAX_REL,
-                ASSIST_MAX_ABS,
-              ),
-            );
-          }
-          if (
-            assist.sparseSince &&
-            nowT - assist.sparseSince > ASSIST_RELEASE_MS
-          ) {
-            assist.engaged = false;
-          }
-        }
-
-        const want = assist.engaged ? assist.lockedZoom : assist.base;
-        if (aim.spdEma < ASSIST_GLIDE_SPD) {
-          const z = zoom + (want - zoom) * (1 - Math.exp(-dt / GLIDE_TAU_MS));
-          if (Math.abs(z - zoom) > 0.0004) {
-            const sx = steer.x * zoom + vp.x;
-            const sy = steer.y * zoom + vp.y;
-            rf.setViewport({
-              x: sx - steer.x * z,
-              y: sy - steer.y * z,
-              zoom: z,
-            });
-          }
+        // Compose one viewport write: zoom about the steer point, then
+        // the recentering pan easing the steer point back toward the
+        // middle band (never yanked to dead center).
+        const sxScr = steer.x * zoom + vp.x;
+        const syScr = steer.y * zoom + vp.y;
+        let nx = sxScr - steer.x * z;
+        let ny = syScr - steer.y * z;
+        const cw = wrapEl.clientWidth;
+        const chh = wrapEl.clientHeight;
+        const bandX = cw * CENTER_BAND_FRAC;
+        const bandY = chh * CENTER_BAND_FRAC;
+        const errX =
+          sxScr - Math.min(Math.max(sxScr, cw / 2 - bandX), cw / 2 + bandX);
+        const errY =
+          syScr - Math.min(Math.max(syScr, chh / 2 - bandY), chh / 2 + bandY);
+        const k = 1 - Math.exp(-dt / (CENTER_TAU_MS * lag));
+        nx -= errX * k;
+        ny -= errY * k;
+        if (
+          Math.abs(z - zoom) > 0.0004 ||
+          Math.abs(nx - vp.x) > 0.01 ||
+          Math.abs(ny - vp.y) > 0.01
+        ) {
+          rf.setViewport({ x: nx, y: ny, zoom: z });
+          // A camera move under a stationary pointer shifts the card's
+          // flow position — that isn't hand motion, so keep it out of
+          // the tilt physics (same treatment as the centering blend).
+          tiltRef.current.prevX += (sxScr - nx) / z - steer.x;
         }
       }
 
@@ -3824,6 +4421,7 @@ function PartsMapApp() {
       // flash at the derived position while the loop spins up.
       setDragOverride({ id: node.id, pos: { ...node.position } });
       cancelAnimationFrame(restoreRafRef.current);
+      cancelAnimationFrame(glideRafRef.current);
       const isTouch = isTouchInput(e);
       const session = { id: node.id, isTouch };
       liftInfoRef.current = session;
@@ -3879,15 +4477,13 @@ function PartsMapApp() {
         prevT: performance.now(),
         lastTickAt: 0,
       };
-      zoomAssistRef.current = {
+      followRef.current = {
         base: rf.getViewport().zoom || 1,
         reduced:
           window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
           false,
-        denseSince: 0,
-        sparseSince: 0,
-        engaged: false,
-        lockedZoom: 0,
+        phone: isPhoneRef.current,
+        near: false,
       };
       // Seed the landing truth synchronously: a flick released before
       // the first rAF frame must still land where it was dropped, not
@@ -3977,16 +4573,16 @@ function PartsMapApp() {
       // The loop-corrected center (cursor-held), not RF's grab-offset
       // position — the card lands exactly where the person sees it.
       const dropPos = { ...cardPosRef.current };
-      // Focus assist hands the camera back: ease to the lift-start zoom,
+      // The follow camera hands back: ease to the lift-start zoom,
       // pivoting on the drop point so the landed card doesn't jump.
-      const assist = zoomAssistRef.current;
-      zoomAssistRef.current = null;
-      if (assist && !assist.reduced) {
+      const follow = followRef.current;
+      followRef.current = null;
+      if (follow && !follow.reduced) {
         const vp = rf.getViewport();
-        if (Math.abs(vp.zoom - assist.base) > 0.01) {
+        if (Math.abs(vp.zoom - follow.base) > 0.01) {
           cancelAnimationFrame(restoreRafRef.current);
           const fromZ = vp.zoom;
-          const toZ = assist.base;
+          const toZ = follow.base;
           const sx = dropPos.x * fromZ + vp.x;
           const sy = dropPos.y * fromZ + vp.y;
           const start = performance.now();
@@ -4014,6 +4610,7 @@ function PartsMapApp() {
           inner.style.transform = "";
         }
         const zone = nearestOffZone(dropPos, bodyScaleRef.current);
+        pushHistory(`move:${info.id}`, "move");
         setParts((ps) =>
           ps.map((p) =>
             p.id === info.id
@@ -4034,6 +4631,7 @@ function PartsMapApp() {
         // pulsing point the aim promised. Landing effects fire at
         // touchdown, never at release.
         const { key, depth } = last.target;
+        pushHistory(`move:${info.id}`, "move");
         const updated = partsRef.current.map((p) =>
           p.id === info.id
             ? { ...p, offBody: false, location: key, depth }
@@ -4063,7 +4661,7 @@ function PartsMapApp() {
       }
       autoArmedRef.current = true;
     },
-    [rf, settleTween],
+    [rf, settleTween, pushHistory],
   );
 
   /* The ripple element removes itself once its animation has played. */
@@ -4077,15 +4675,22 @@ function PartsMapApp() {
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     // Resize dimension changes first, so their companion position changes
     // in the same batch are recognized as part of an active resize.
+    const dims: { id: string; w: number; h: number }[] = [];
+    const removed: string[] = [];
     for (const ch of changes) {
-      if (ch.type === "dimensions" && ch.resizing && ch.dimensions) {
-        resizingRef.current = ch.id;
-        const dim = ch.dimensions;
-        setParts((ps) =>
-          ps.map((p) =>
-            p.id === ch.id ? { ...p, w: dim.width, h: dim.height } : p,
-          ),
-        );
+      if (ch.type === "dimensions" && ch.dimensions) {
+        // Every measurement — resize or RF's initial DOM measure — is
+        // remembered and echoed back via the nodes memo (see measuredDims).
+        dims.push({ id: ch.id, w: ch.dimensions.width, h: ch.dimensions.height });
+        if (ch.resizing) {
+          resizingRef.current = ch.id;
+          const dim = ch.dimensions;
+          setParts((ps) =>
+            ps.map((p) =>
+              p.id === ch.id ? { ...p, w: dim.width, h: dim.height } : p,
+            ),
+          );
+        }
       }
     }
     for (const ch of changes) {
@@ -4103,15 +4708,41 @@ function PartsMapApp() {
         setSelectedId((prev) =>
           ch.selected ? ch.id : prev === ch.id ? null : prev,
         );
+        if (ch.selected) {
+          maybeShowLinkHint();
+          // One sheet at a time on phones: selecting a card summons the
+          // edit sheet, so the list sheet steps aside first.
+          if (isPhoneRef.current) setListOpen(false);
+        }
       } else if (ch.type === "remove") {
+        const nm = partsRef.current.find((p) => p.id === ch.id)?.name;
+        pushHistory(`delete:${ch.id}`, nm ? `deleted “${nm}”` : "delete");
         setParts((ps) => ps.filter((p) => p.id !== ch.id));
         setArrows((as) =>
           as.filter((a) => a.sourceId !== ch.id && a.targetId !== ch.id),
         );
+        removed.push(ch.id);
         autoArmedRef.current = true;
       }
     }
-  }, []);
+    if (dims.length || removed.length) {
+      setMeasuredDims((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const d of dims) {
+          const cur = next.get(d.id);
+          if (!cur || cur.w !== d.w || cur.h !== d.h) {
+            next.set(d.id, { w: d.w, h: d.h });
+            changed = true;
+          }
+        }
+        for (const id of removed) {
+          if (next.delete(id)) changed = true;
+        }
+        return changed ? next : prev;
+      });
+    }
+  }, [pushHistory, maybeShowLinkHint]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     for (const ch of changes) {
@@ -4119,31 +4750,51 @@ function PartsMapApp() {
         setSelectedEdgeId((prev) =>
           ch.selected ? ch.id : prev === ch.id ? null : prev,
         );
+        // The arrow editor lives at canvas level — don't leave it buried
+        // under the phone list sheet.
+        if (ch.selected && isPhoneRef.current) setListOpen(false);
       } else if (ch.type === "remove") {
+        pushHistory(`arrow-delete:${ch.id}`, "arrow removed");
         setArrows((as) => as.filter((a) => a.id !== ch.id));
       }
     }
-  }, []);
+  }, [pushHistory]);
 
-  const onConnect = useCallback((conn: Connection) => {
-    if (!conn.source || !conn.target || conn.source === conn.target) return;
-    setArrows((as) => [
-      ...as,
-      {
-        id: newId("arrow"),
-        sourceId: conn.source,
-        targetId: conn.target,
-        color: ARROW_COLORS[0],
-      },
-    ]);
-  }, []);
+  const onConnect = useCallback(
+    (conn: Connection) => {
+      if (!conn.source || !conn.target || conn.source === conn.target) return;
+      pushHistory("arrow-add", "arrow");
+      setArrows((as) => [
+        ...as,
+        {
+          id: newId("arrow"),
+          sourceId: conn.source,
+          targetId: conn.target,
+          color: ARROW_COLORS[0],
+        },
+      ]);
+    },
+    [pushHistory],
+  );
 
   /* ——— the app API handed to nodes / edges / panels ——— */
   const api = useMemo<AppApi>(
     () => ({
-      updatePart: (id, patch) =>
-        setParts((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p))),
+      updatePart: (id, patch) => {
+        const keys = Object.keys(patch);
+        pushHistory(
+          `edit:${id}:${keys.join(",")}`,
+          keys.includes("name")
+            ? "rename"
+            : keys.includes("note")
+              ? "note edit"
+              : "style edit",
+        );
+        setParts((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+      },
       deletePart: (id) => {
+        const nm = partsRef.current.find((p) => p.id === id)?.name;
+        pushHistory(`delete:${id}`, nm ? `deleted “${nm}”` : "delete");
         setParts((ps) => ps.filter((p) => p.id !== id));
         setArrows((as) =>
           as.filter((a) => a.sourceId !== id && a.targetId !== id),
@@ -4155,6 +4806,7 @@ function PartsMapApp() {
       setLocationText: (id, text) => {
         const m = matchRegion(text);
         if (!m) return false;
+        pushHistory(`move:${id}`, "move");
         const region = REGION_BY_KEY[m.key];
         const scale = bodyScaleRef.current;
         if (region.offBody) {
@@ -4191,6 +4843,7 @@ function PartsMapApp() {
         return true;
       },
       setDepth: (id, depth) => {
+        pushHistory(`flip:${id}`, "front/back flip");
         const scale = bodyScaleRef.current;
         const updated = partsRef.current.map((p) =>
           p.id === id ? { ...p, depth } : p,
@@ -4217,6 +4870,7 @@ function PartsMapApp() {
           x: internal.internals.positionAbsolute.x + (w ?? 0) / 2,
           y: internal.internals.positionAbsolute.y + (h ?? 0) / 2,
         };
+        pushHistory(`resize:${id}`, "resize");
         const updated = partsRef.current.map((p) =>
           p.id === id
             ? {
@@ -4239,9 +4893,17 @@ function PartsMapApp() {
         }
         autoArmedRef.current = true;
       },
-      updateArrow: (id, patch) =>
-        setArrows((as) => as.map((a) => (a.id === id ? { ...a, ...patch } : a))),
+      updateArrow: (id, patch) => {
+        pushHistory(
+          `arrow-edit:${id}:${Object.keys(patch).join(",")}`,
+          "label" in patch ? "arrow label" : "arrow style",
+        );
+        setArrows((as) =>
+          as.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+        );
+      },
       deleteArrow: (id) => {
+        pushHistory(`arrow-delete:${id}`, "arrow removed");
         setArrows((as) => as.filter((a) => a.id !== id));
         setSelectedEdgeId((prev) => (prev === id ? null : prev));
       },
@@ -4253,7 +4915,7 @@ function PartsMapApp() {
         else innerElsRef.current.delete(id);
       },
     }),
-    [rf, settleTween],
+    [rf, settleTween, pushHistory],
   );
 
   /* ——— creation: tap-to-place ——— */
@@ -4294,6 +4956,7 @@ function PartsMapApp() {
       const scale = bodyScaleRef.current;
       const flow = rf.screenToFlowPosition(client);
       const id = newId("part");
+      pushHistory(`add:${id}`, `added “${info.name}”`);
       colorCountRef.current++;
       const base = {
         id,
@@ -4348,7 +5011,7 @@ function PartsMapApp() {
       if (!isPhoneRef.current) setSelectedId(id);
       autoArmedRef.current = true;
     },
-    [rf, settleTween],
+    [rf, settleTween, pushHistory],
   );
 
   /* Placement mode: capture-phase listeners own the canvas (a stray pan
@@ -4518,10 +5181,11 @@ function PartsMapApp() {
           shape: "rounded" as const,
         };
       });
+      pushHistory("import", `imported ${newParts.length} parts`);
       setParts((ps) => [...ps, ...newParts]);
       autoArmedRef.current = true;
     },
-    [],
+    [pushHistory],
   );
 
   /* ——— persistence ——— */
@@ -4534,6 +5198,8 @@ function PartsMapApp() {
       autoScale,
       viewport: rf.getViewport(),
     });
+    dirtyRef.current = false;
+    setNotice({ text: "Saved ✓", key: Date.now() });
   }, [parts, arrows, bodyScale, autoScale, rf]);
 
   const onLoad = useCallback(
@@ -4554,12 +5220,17 @@ function PartsMapApp() {
         setSelectedId(null);
         setSelectedEdgeId(null);
         if (doc.viewport) rf.setViewport(doc.viewport);
+        // A fresh document: yesterday's history belongs to the old map.
+        historyRef.current = [];
+        setMeasuredDims(new Map());
+        dirtyRef.current = false;
         // A loaded map may open crowded — let the auto-grow pass judge it.
         autoArmedRef.current = true;
       } catch {
-        window.alert(
-          "Couldn't read that file — it doesn't look like a Parts Map JSON.",
-        );
+        setNotice({
+          text: "Couldn't read that file — it doesn't look like a Parts Map JSON.",
+          key: Date.now(),
+        });
       }
     },
     [rf, cancelPlacing],
@@ -4570,7 +5241,67 @@ function PartsMapApp() {
     cancelAnimationFrame(scaleRafRef.current);
     manualScaleRef.current = v;
     setBodyScale(v);
+    dirtyRef.current = true;
   }, []);
+
+  /* ——— unsaved-changes guard: prompt before the tab closes with work
+         that never reached a file. No autosave, no storage — these maps
+         are sensitive, and leaving nothing behind is deliberate. ——— */
+  useEffect(() => {
+    const onBefore = (e: BeforeUnloadEvent) => {
+      if (dirtyRef.current) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", onBefore);
+    return () => window.removeEventListener("beforeunload", onBefore);
+  }, []);
+
+  /* ——— keyboard: Ctrl/Cmd+Z undo, Escape puts things down, Enter opens
+         the selected part's name for editing. Deliberately minimal. ——— */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable);
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "z"
+      ) {
+        // Fields keep their own text undo; mid-drag / mid-placement the
+        // map is in the hand, not on the table.
+        if (typing || liftInfoRef.current || placingRef.current) return;
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (typing || placingRef.current) return;
+      if (e.key === "Escape") {
+        if (importOpen) setImportOpen(false);
+        else {
+          setSelectedEdgeId(null);
+          setSelectedId(null);
+        }
+        return;
+      }
+      if (e.key === "Enter" && selectedId) {
+        // The open editor (popover or sheet) carries the name field.
+        const el = document.querySelector<HTMLInputElement>(
+          "[data-part-name-input]",
+        );
+        if (el) {
+          e.preventDefault();
+          el.focus();
+          el.select();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, importOpen, selectedId]);
+
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
          Reworked to actually make a difference: one decisive move to the
@@ -4579,9 +5310,10 @@ function PartsMapApp() {
          back down (never below the hand-set slider value). Every move
          announces itself in a small pill with one-tap Undo. ——— */
   useEffect(() => {
-    // NOTE: no useNodesInitialized gate — it reports false indefinitely in
-    // this controlled setup (it silently disabled the old auto-grow). The
-    // pair loop already skips nodes without measured dimensions.
+    // NOTE: no useNodesInitialized gate — historically it reported false
+    // forever because measurements weren't echoed back through the
+    // controlled nodes (fixed via measuredDims); the pair loop skipping
+    // unmeasured nodes still covers the brief pre-measure window.
     if (!autoScale || !autoArmedRef.current) return;
     if (lift || dragOverride || settlingRef.current) return;
     const timer = setTimeout(() => {
@@ -4604,10 +5336,11 @@ function PartsMapApp() {
         // floor rather than staying stuck large.
         if (cur > floor + 0.02) {
           animateBodyScale(floor);
-          setAutoNote({
+          setNotice({
             text: `Auto-space: eased back (${Math.round((floor / cur - 1) * 100)}%)`,
-            prev: cur,
             key: Date.now(),
+            action: { label: "Undo", run: () => animateBodyScale(cur) },
+            ttlMs: 8000,
           });
         }
         return;
@@ -4664,13 +5397,14 @@ function PartsMapApp() {
         animateBodyScale(target);
         const pct = Math.round((target / cur - 1) * 100);
         if (pct !== 0) {
-          setAutoNote({
+          setNotice({
             text:
               pct > 0
                 ? `Auto-space: made room (+${pct}%)`
                 : `Auto-space: eased back (${pct}%)`,
-            prev: cur,
             key: Date.now(),
+            action: { label: "Undo", run: () => animateBodyScale(cur) },
+            ttlMs: 8000,
           });
         }
       }
@@ -4685,31 +5419,47 @@ function PartsMapApp() {
     animateBodyScale,
   ]);
 
-  /* The auto-space pill quietly excuses itself. */
+  /* The notice pill quietly excuses itself. */
   useEffect(() => {
-    if (!autoNote) return;
-    const t = setTimeout(() => setAutoNote(null), 4200);
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), notice.ttlMs ?? 4500);
     return () => clearTimeout(t);
-  }, [autoNote]);
+  }, [notice]);
 
   /* ——— derived views: one parts array → nodes + list ——— */
   const nodes: Node[] = useMemo(() => {
     const posMap = derivePositions(parts, bodyScale);
-    return parts.map((p) => ({
-      id: p.id,
-      type: "part" as const,
-      position:
-        dragOverride?.id === p.id ? dragOverride.pos : posMap.get(p.id)!,
-      width: p.w,
-      height: p.h,
-      selected: p.id === selectedId,
-      data: {
-        part: p,
-        lifted: lift?.id === p.id,
-        popKey: dropPop?.id === p.id ? dropPop.key : 0,
-      },
-    }));
-  }, [parts, bodyScale, dragOverride, selectedId, lift, dropPop]);
+    return parts.map((p) => {
+      const md = measuredDims.get(p.id);
+      return {
+        id: p.id,
+        type: "part" as const,
+        position:
+          dragOverride?.id === p.id ? dragOverride.pos : posMap.get(p.id)!,
+        width: p.w,
+        height: p.h,
+        // Echo RF's own measurement back so adoptUserNodes doesn't wipe it
+        // on every rebuild of these fresh node objects (RF error #015).
+        measured: md ? { width: md.w, height: md.h } : undefined,
+        selected: p.id === selectedId,
+        data: {
+          part: p,
+          lifted: lift?.id === p.id,
+          popKey: dropPop?.id === p.id ? dropPop.key : 0,
+          revealKey: reveal?.id === p.id ? reveal.key : 0,
+        },
+      };
+    });
+  }, [
+    parts,
+    bodyScale,
+    dragOverride,
+    selectedId,
+    lift,
+    dropPop,
+    reveal,
+    measuredDims,
+  ]);
 
   const edges: Edge[] = useMemo(
     () =>
@@ -4753,6 +5503,9 @@ function PartsMapApp() {
           onPaneClick={() => {
             setSelectedId(null);
             setSelectedEdgeId(null);
+            // On phone the list is a sheet over the canvas — a tap on the
+            // map means "let me see it."
+            if (isPhoneRef.current) setListOpen(false);
           }}
           nodeOrigin={[0.5, 0.5]}
           connectionMode={ConnectionMode.Loose}
@@ -4762,6 +5515,10 @@ function PartsMapApp() {
           minZoom={0.15}
           maxZoom={4}
           zoomOnDoubleClick={false}
+          // The drag-follow camera owns edge-following during drags; RF's
+          // own auto-pan would double-pan. Reduced motion turns our camera
+          // glides off, so RF's (functional, not decorative) pan returns.
+          autoPanOnNodeDrag={reducedMotion}
           nodeDragThreshold={4}
           nodeClickDistance={8}
           paneClickDistance={8}
@@ -4841,7 +5598,10 @@ function PartsMapApp() {
           bodyScale={bodyScale}
           onBodyScale={onBodyScaleManual}
           autoScale={autoScale}
-          onAutoScale={setAutoScale}
+          onAutoScale={(v) => {
+            setAutoScale(v);
+            dirtyRef.current = true;
+          }}
           onSave={onSave}
           onLoad={onLoad}
           listOpen={listOpen}
@@ -4849,14 +5609,28 @@ function PartsMapApp() {
           soundOn={soundOn}
           onToggleSound={() => setSoundOn((v) => !v)}
         />
-        <PartsListPanel
-          parts={parts}
-          arrows={arrows}
-          open={listOpen}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onClose={() => setListOpen(false)}
-        />
+        <FrameMapButton onFrame={fitAll} />
+        {/* Parts list — a docked side panel on desktop, a bottom sheet on
+            phones (hidden while dragging/placing, like the edit sheet). */}
+        {isPhone ? (
+          <PhonePartsSheet
+            parts={parts}
+            arrows={arrows}
+            open={listOpen && !lift && !placing}
+            onReveal={revealPart}
+            onClose={() => setListOpen(false)}
+          />
+        ) : (
+          <PartsListPanel
+            parts={parts}
+            arrows={arrows}
+            open={listOpen}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onReveal={revealPart}
+            onClose={() => setListOpen(false)}
+          />
+        )}
         {/* Phone card editor — bottom sheet; hides while dragging/placing
             so it never covers a landing. */}
         <MobileEditSheet
@@ -4870,10 +5644,10 @@ function PartsMapApp() {
           }
           onClose={() => setSelectedId(null)}
         />
-        {/* Auto-space feedback: what it did, one tap to take it back. */}
-        {autoNote && (
+        {/* Quiet notice pill: what just happened, sometimes one action. */}
+        {notice && (
           <div
-            key={autoNote.key}
+            key={notice.key}
             data-ui-chrome
             className="fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full py-1.5 pl-4 pr-1.5 sm:bottom-auto sm:top-16"
             style={{ ...panelStyle, touchAction: "manipulation" }}
@@ -4882,18 +5656,22 @@ function PartsMapApp() {
               className="whitespace-nowrap text-[11px]"
               style={{ color: "var(--ink-soft)" }}
             >
-              {autoNote.text}
+              {notice.text}
             </span>
-            <button
-              className="rounded-full px-2.5 py-1 text-[11px]"
-              style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink)" }}
-              onClick={() => {
-                animateBodyScale(autoNote.prev);
-                setAutoNote(null);
-              }}
-            >
-              Undo
-            </button>
+            {notice.action ? (
+              <button
+                className="rounded-full px-2.5 py-1 text-[11px]"
+                style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink)" }}
+                onClick={() => {
+                  notice.action!.run();
+                  setNotice(null);
+                }}
+              >
+                {notice.action.label}
+              </button>
+            ) : (
+              <span className="pr-1.5" />
+            )}
           </div>
         )}
         <ImportModal

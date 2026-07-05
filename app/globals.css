@@ -268,8 +268,51 @@ input[type="range"]::-moz-range-thumb {
   animation: drop-ripple 560ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+/* ————— Reveal halo —————
+   The list's "where is it?": after the camera glides to the part, its
+   card breathes a soft accent halo twice, then rests. */
+@keyframes reveal-glow {
+  0%,
+  100% {
+    box-shadow: var(--shadow-rest);
+  }
+  25%,
+  75% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent),
+      var(--shadow-rest);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1.5px color-mix(in srgb, var(--accent) 25%, transparent),
+      var(--shadow-rest);
+  }
+}
+.part-inner.reveal-glow {
+  animation: reveal-glow 1400ms ease-in-out;
+}
+
+/* ————— Touch arrow discoverability —————
+   Hover reveals the connect dots on desktop; touch has no hover, so on
+   coarse pointers the dots pulse gently twice when a card is selected —
+   a quiet "these are for drawing arrows". */
+@keyframes handle-hint {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.35);
+  }
+}
+@media (pointer: coarse) {
+  .react-flow__node.selected .part-source-handle::after {
+    animation: handle-hint 450ms ease-in-out 2;
+  }
+}
+
 /* ————— Reduced motion —————
-   The drag focus assist already opts out (handled in JS); quiet the
+   The drag-follow camera already opts out (handled in JS); quiet the
    decorative animations too. */
 @media (prefers-reduced-motion: reduce) {
   .indicator-pop,
@@ -285,6 +328,13 @@ input[type="range"]::-moz-range-thumb {
   .anchor-pulse {
     animation: none;
     opacity: 0.55;
+  }
+  /* No static substitute for the reveal halo: without the animation
+     there is no animationend to retire it — the centered camera alone
+     answers "where is it". */
+  .part-inner.reveal-glow,
+  .react-flow__node.selected .part-source-handle::after {
+    animation: none;
   }
   .part-inner {
     transition: box-shadow 120ms ease;
