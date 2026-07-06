@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/db";
 import { maps } from "@/db/schema";
 import { parseMapJson } from "@/lib/persistence";
+import { readCappedText } from "./read-body";
 
 /** Same cap the client seam enforces before it ever sends the request —
  *  belt and suspenders, since the server is the actual authority. */
@@ -31,8 +32,8 @@ export async function POST(request: Request) {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) {
+  const text = await readCappedText(request, MAX_BODY_BYTES);
+  if (text === null) {
     return NextResponse.json({ error: "Map is too large" }, { status: 413 });
   }
   let body: { title?: unknown; doc?: unknown };

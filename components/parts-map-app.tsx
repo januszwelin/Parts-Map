@@ -81,11 +81,20 @@ import {
   interpretLocations,
   parseImportText,
 } from "@/lib/matcher";
-import { downloadMap, loadMapFile } from "@/lib/persistence";
+import { downloadMap, loadMapFile, parseMapJson } from "@/lib/persistence";
 import { createMap, updateMap, CloudError } from "@/lib/cloud";
+import { authClient } from "@/lib/auth-client";
+import {
+  getDraftEnabled,
+  setDraftEnabled,
+  saveDraft,
+  readDraftJson,
+  clearDraft,
+} from "@/lib/draft";
 import { sndPlay, sndSetMuted, magnetTick } from "@/lib/sound";
 import { haptic } from "@/lib/haptics";
 import { getWelcomeSeen, setWelcomeSeen } from "@/lib/onboarding";
+import { sampleMap } from "@/lib/sample-map";
 import { partSurface } from "@/lib/part-utils";
 import { panelStyle } from "@/lib/ui";
 import { AppApiContext, type AppApi } from "@/hooks/use-app-api";
@@ -244,6 +253,21 @@ function PartsMapApp() {
     action?: { label: string; run: () => void };
     ttlMs?: number;
   } | null>(null);
+  /** Save/sync state for the toolbar indicator. "clean" = matches last
+   *  save/load, "dirty" = unsaved edits, "saving"/"saved" = cloud sync. */
+  const [saveStatus, setSaveStatus] = useState<
+    "clean" | "dirty" | "saving" | "saved"
+  >("clean");
+  /** Bumped on every map mutation — the debounce key for cloud auto-save
+   *  and the opt-in local draft (a plain "dirty" boolean wouldn't re-fire
+   *  the debounce on the 2nd, 3rd… edit). */
+  const [dirtyNonce, setDirtyNonce] = useState(0);
+  /** Opt-in: mirror the map to this device's localStorage so a tab-close
+   *  can't lose work. OFF by default — these maps are sensitive, so nothing
+   *  is stored without explicit consent (lib/draft.ts). */
+  const [draftEnabled, setDraftEnabledState] = useState(false);
+  const { data: session } = authClient.useSession();
+
   /** Session-only sound preference (no persistence by design). */
   const [soundOn, setSoundOn] = useState(true);
   useEffect(() => {
@@ -272,6 +296,10 @@ function PartsMapApp() {
   useEffect(() => {
     bodyScaleRef.current = bodyScale;
   }, [bodyScale]);
+  const autoScaleRef = useRef(autoScale);
+  useEffect(() => {
+    autoScaleRef.current = autoScale;
+  }, [autoScale]);
 
   /* ——— onboarding: a first-run welcome, and an optional guided tour ———
      The only localStorage this app touches, and only for a "have they
@@ -358,13 +386,28 @@ function PartsMapApp() {
   const historyRef = useRef<
     { parts: Part[]; arrows: Arrow[]; label: string; tag: string; at: number }[]
   >([]);
+  /** Redo stack — the inverse of historyRef. Fed only by undo(); wiped by
+   *  any fresh mutation (a new action forks the timeline) and on load. */
+  const redoRef = useRef<
+    { parts: Part[]; arrows: Arrow[]; label: string; tag: string; at: number }[]
+  >([]);
   /** Anything worth undoing is also unsaved — the beforeunload guard
    *  reads this. Cleared on save and on load. */
   const dirtyRef = useRef(false);
+  /** Single entry point for "the map changed": flips the ref the unload
+   *  guard reads, lights the toolbar indicator, and bumps the debounce
+   *  nonce that drives cloud auto-save + the local draft. */
+  const markDirty = useCallback(() => {
+    dirtyRef.current = true;
+    setSaveStatus("dirty");
+    setDirtyNonce((n) => n + 1);
+  }, []);
   /** Snapshot the map BEFORE a mutation. Same-tag pushes within a second
    *  coalesce (scrubbing color swatches is one undo, not eight). */
   const pushHistory = useCallback((tag: string, label: string) => {
-    dirtyRef.current = true;
+    markDirty();
+    // A fresh action forks the timeline — the redo branch is now stale.
+    redoRef.current = [];
     const h = historyRef.current;
     const now = Date.now();
     const top = h[h.length - 1];
@@ -380,7 +423,7 @@ function PartsMapApp() {
       at: now,
     });
     if (h.length > 30) h.shift();
-  }, []);
+  }, [markDirty]);
 
   /* One-time touch hint: the connect dots have no hover to reveal them
      on touch — name them once, the first time a card is selected. */
@@ -664,6 +707,15 @@ function PartsMapApp() {
   const undo = useCallback(() => {
     const snap = historyRef.current.pop();
     if (!snap) return;
+    // Bank the current (post-action) state so redo can return to it.
+    redoRef.current.push({
+      parts: partsRef.current,
+      arrows: arrowsRef.current,
+      label: snap.label,
+      tag: snap.tag,
+      at: Date.now(),
+    });
+    if (redoRef.current.length > 30) redoRef.current.shift();
     cancelSettle();
     setDragOverride(null);
     setParts(snap.parts);
@@ -673,6 +725,30 @@ function PartsMapApp() {
     autoArmedRef.current = false;
     setNotice({ text: `Undid — ${snap.label}`, key: Date.now() });
   }, [cancelSettle]);
+
+  /** Re-apply the last undone change. Symmetric with undo: banks the current
+   *  (pre-redo) state onto history so the redo can itself be undone. */
+  const redo = useCallback(() => {
+    const snap = redoRef.current.pop();
+    if (!snap) return;
+    historyRef.current.push({
+      parts: partsRef.current,
+      arrows: arrowsRef.current,
+      label: snap.label,
+      tag: snap.tag,
+      at: Date.now(),
+    });
+    if (historyRef.current.length > 30) historyRef.current.shift();
+    cancelSettle();
+    setDragOverride(null);
+    setParts(snap.parts);
+    setArrows(snap.arrows);
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+    autoArmedRef.current = false;
+    markDirty();
+    setNotice({ text: `Redid — ${snap.label}`, key: Date.now() });
+  }, [cancelSettle, markDirty]);
 
   const settleTween = useCallback(
     (
@@ -753,7 +829,7 @@ function PartsMapApp() {
       const from = bodyScaleRef.current;
       const to = Math.min(MAX_SCALE, Math.max(MIN_SCALE, target));
       if (Math.abs(to - from) < 0.005) return;
-      dirtyRef.current = true;
+      markDirty();
       const el = wrapperRef.current;
       const phone = !!el && el.clientWidth < 640;
       const vp0 = rf.getViewport();
@@ -782,7 +858,7 @@ function PartsMapApp() {
       };
       scaleRafRef.current = requestAnimationFrame(step);
     },
-    [rf],
+    [rf, markDirty],
   );
 
   /* ——— the lift rAF loop: steering, sticky magnet, drag-follow camera ——— */
@@ -1571,6 +1647,16 @@ function PartsMapApp() {
           as.map((a) => (a.id === id ? { ...a, ...patch } : a)),
         );
       },
+      reverseArrow: (id) => {
+        pushHistory(`arrow-reverse:${id}`, "arrow reversed");
+        setArrows((as) =>
+          as.map((a) =>
+            a.id === id
+              ? { ...a, sourceId: a.targetId, targetId: a.sourceId }
+              : a,
+          ),
+        );
+      },
       deleteArrow: (id) => {
         pushHistory(`arrow-delete:${id}`, "arrow removed");
         setArrows((as) => as.filter((a) => a.id !== id));
@@ -1879,6 +1965,10 @@ function PartsMapApp() {
       viewport: rf.getViewport(),
     });
     dirtyRef.current = false;
+    setSaveStatus("saved");
+    // The map now lives in a file; the reload-recovery draft has done its
+    // job and would otherwise resurface as a stale "restore?" next visit.
+    clearDraft();
     setNotice({ text: "Saved ✓", key: Date.now() });
   }, [parts, arrows, bodyScale, autoScale, rf]);
 
@@ -1902,8 +1992,10 @@ function PartsMapApp() {
       if (doc.viewport) rf.setViewport(doc.viewport);
       // A fresh document: yesterday's history belongs to the old map.
       historyRef.current = [];
+      redoRef.current = [];
       setMeasuredDims(new Map());
       dirtyRef.current = false;
+      setSaveStatus("clean");
       // A loaded map may open crowded — let the auto-grow pass judge it.
       autoArmedRef.current = true;
     },
@@ -1931,6 +2023,7 @@ function PartsMapApp() {
       autoScale,
       viewport: rf.getViewport(),
     };
+    setSaveStatus("saving");
     setNotice({ text: "Saving to your maps…", key: Date.now() });
     try {
       if (cloudDocRef.current) {
@@ -1949,8 +2042,12 @@ function PartsMapApp() {
         cloudDocRef.current = { id: created.id, title: created.title };
       }
       dirtyRef.current = false;
+      setSaveStatus("saved");
+      clearDraft();
       setNotice({ text: "Saved to your maps ✓", key: Date.now() });
     } catch (e) {
+      // Still unsaved — let the indicator and next debounce reflect that.
+      setSaveStatus("dirty");
       setNotice({
         text: e instanceof CloudError ? e.message : "Couldn't save to your maps.",
         key: Date.now(),
@@ -1990,12 +2087,101 @@ function PartsMapApp() {
     cancelAnimationFrame(scaleRafRef.current);
     manualScaleRef.current = v;
     setBodyScale(v);
-    dirtyRef.current = true;
+    markDirty();
+  }, [markDirty]);
+
+  /* ——— auto-save & opt-in local draft (v1.3) ————————————————————————
+         The old "no storage at all" stance is now opt-in rather than
+         absolute: a signed-in map keeps its cloud copy in sync on its own,
+         and anyone may turn on a private on-device draft. Both are debounced
+         off markDirty's nonce; neither stores anything without consent (the
+         cloud requires an account; the draft requires the explicit toggle). */
+  const currentDoc = useCallback(
+    (): MapDoc => ({
+      version: 1,
+      parts: partsRef.current,
+      arrows: arrowsRef.current,
+      bodyScale: bodyScaleRef.current,
+      autoScale: autoScaleRef.current,
+      viewport: rf.getViewport(),
+    }),
+    [rf],
+  );
+
+  // Read the opt-in flag once on the client (localStorage is server-absent —
+  // same hydration-safe shape as the welcome flag).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraftEnabledState(getDraftEnabled());
   }, []);
 
+  const toggleDraft = useCallback(
+    (on: boolean) => {
+      setDraftEnabled(on);
+      setDraftEnabledState(on);
+      if (on) saveDraft(currentDoc());
+      setNotice({
+        text: on
+          ? "Keeping a private draft on this device."
+          : "Local draft off — cleared from this device.",
+        key: Date.now(),
+      });
+    },
+    [currentDoc],
+  );
+
+  // Cloud auto-save: keep an already-cloud-saved map in sync. Deliberately
+  // does NOT create a cloud map on its own — first persisting to the cloud
+  // stays an explicit "Save to cloud". Debounced ~2.5s past the last edit.
+  useEffect(() => {
+    if (!session || !cloudDocRef.current || !dirtyRef.current) return;
+    const t = window.setTimeout(() => {
+      void saveToCloud();
+    }, 2500);
+    return () => window.clearTimeout(t);
+  }, [dirtyNonce, session, saveToCloud]);
+
+  // Local draft: mirror the map to localStorage while enabled, debounced
+  // ~1.2s so a scrub of edits writes once.
+  useEffect(() => {
+    if (!draftEnabled || !dirtyRef.current) return;
+    const t = window.setTimeout(() => saveDraft(currentDoc()), 1200);
+    return () => window.clearTimeout(t);
+  }, [dirtyNonce, draftEnabled, currentDoc]);
+
+  // First client render: offer to restore a draft left by a prior visit.
+  const draftOfferedRef = useRef(false);
+  useEffect(() => {
+    if (draftOfferedRef.current) return;
+    draftOfferedRef.current = true;
+    if (!getDraftEnabled()) return;
+    const json = readDraftJson();
+    if (!json) return;
+    let doc: MapDoc;
+    try {
+      doc = parseMapJson(json);
+    } catch {
+      clearDraft();
+      return;
+    }
+    if (doc.parts.length === 0) return;
+    setNotice({
+      text: "Restore your last map?",
+      key: Date.now(),
+      ttlMs: 15000,
+      action: {
+        label: "Restore",
+        run: () => {
+          applyLoadedDoc(doc);
+          cloudDocRef.current = null;
+        },
+      },
+    });
+  }, [applyLoadedDoc]);
+
   /* ——— unsaved-changes guard: prompt before the tab closes with work
-         that never reached a file. No autosave, no storage — these maps
-         are sensitive, and leaving nothing behind is deliberate. ——— */
+         that never reached a file or (for a signed-in cloud map) the last
+         auto-save. Belt-and-suspenders alongside the opt-in draft above. ——— */
   useEffect(() => {
     const onBefore = (e: BeforeUnloadEvent) => {
       if (dirtyRef.current) e.preventDefault();
@@ -2014,11 +2200,17 @@ function PartsMapApp() {
         (t.tagName === "INPUT" ||
           t.tagName === "TEXTAREA" ||
           t.isContentEditable);
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        !e.shiftKey &&
-        e.key.toLowerCase() === "z"
-      ) {
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      // Redo: Ctrl/Cmd+Shift+Z or Ctrl+Y. Checked first so Shift+Z doesn't
+      // fall through to undo.
+      if (mod && ((e.shiftKey && key === "z") || key === "y")) {
+        if (typing || liftInfoRef.current || placingRef.current) return;
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (mod && !e.shiftKey && key === "z") {
         // Fields keep their own text undo; mid-drag / mid-placement the
         // map is in the hand, not on the table.
         if (typing || liftInfoRef.current || placingRef.current) return;
@@ -2049,7 +2241,7 @@ function PartsMapApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, importOpen, selectedId]);
+  }, [undo, redo, importOpen, selectedId]);
 
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
@@ -2359,7 +2551,7 @@ function PartsMapApp() {
           autoScale={autoScale}
           onAutoScale={(v) => {
             setAutoScale(v);
-            dirtyRef.current = true;
+            markDirty();
           }}
           onSave={onSave}
           onLoad={onLoad}
@@ -2370,6 +2562,9 @@ function PartsMapApp() {
           onShowWelcome={reopenWelcome}
           onOpenMyMaps={() => setMyMapsOpen(true)}
           onSaveToCloud={saveToCloud}
+          saveStatus={saveStatus}
+          draftEnabled={draftEnabled}
+          onToggleDraft={toggleDraft}
         />
         <FrameMapButton
           onFrame={() => {
@@ -2527,6 +2722,10 @@ function PartsMapApp() {
           open={welcomeOpen}
           onClose={closeWelcome}
           onStartTour={startTour}
+          onExplore={() => {
+            applyLoadedDoc(sampleMap());
+            closeWelcome();
+          }}
         />
         {/* Hidden during tap-to-place (its own hint pill already carries
             the guidance) and hidden behind an open phone list sheet

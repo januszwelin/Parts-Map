@@ -56,6 +56,11 @@ export function Toolbar(props: {
   onShowWelcome: () => void;
   onOpenMyMaps: () => void;
   onSaveToCloud: () => void;
+  /** Save/sync state for the quiet indicator on the Save control. */
+  saveStatus: "clean" | "dirty" | "saving" | "saved";
+  /** Opt-in local draft (keeps work across an accidental tab-close). */
+  draftEnabled: boolean;
+  onToggleDraft: (on: boolean) => void;
 }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [bodyOpen, setBodyOpen] = useState(false);
@@ -190,11 +195,27 @@ export function Toolbar(props: {
         </label>
         <div className="hidden h-4 w-px sm:block" style={{ background: "var(--line)" }} />
         <button
-          className={`${btn} hidden sm:block`}
+          className={`${btn} hidden items-center gap-1.5 sm:inline-flex`}
           style={{ color: "var(--ink-soft)" }}
           onClick={props.onSave}
+          title={
+            props.saveStatus === "dirty"
+              ? "Unsaved changes — Save to a file"
+              : props.saveStatus === "saving"
+                ? "Saving…"
+                : props.saveStatus === "saved"
+                  ? "All changes saved"
+                  : "Save to a file"
+          }
         >
-          Save
+          {props.saveStatus === "saving" ? "Saving…" : "Save"}
+          {props.saveStatus === "dirty" && (
+            <span
+              aria-hidden
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{ background: "var(--accent)" }}
+            />
+          )}
         </button>
         <button
           className={`${btn} hidden sm:block`}
@@ -274,6 +295,19 @@ export function Toolbar(props: {
                 >
                   Sign out
                 </button>
+                <label
+                  className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  title="Keep a private copy on this device so a tab-close can't lose work"
+                >
+                  <input
+                    type="checkbox"
+                    checked={props.draftEnabled}
+                    onChange={(e) => props.onToggleDraft(e.target.checked)}
+                    className="accent-[var(--accent)]"
+                  />
+                  Local draft
+                </label>
                 <div className="my-1 h-px" style={{ background: "var(--line)" }} />
                 {confirmDelete ? (
                   <div className="px-2 py-1">
@@ -417,6 +451,18 @@ export function Toolbar(props: {
             >
               Welcome & tour
             </button>
+            <label
+              className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-xs hover:bg-black/5"
+              style={{ color: "var(--ink-soft)" }}
+            >
+              <input
+                type="checkbox"
+                checked={props.draftEnabled}
+                onChange={(e) => props.onToggleDraft(e.target.checked)}
+                className="accent-[var(--accent)]"
+              />
+              Keep a local draft
+            </label>
             <div className="my-1 h-px" style={{ background: "var(--line)" }} />
             {session ? (
               <>

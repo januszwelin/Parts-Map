@@ -10,10 +10,51 @@ import {
   ARROW_COLORS,
 } from "@/lib/tuning";
 import { REGION_BY_KEY } from "@/lib/regions";
+import type { XYPosition } from "@xyflow/react";
 import { newId, type Part, type Arrow, type MapDoc } from "@/lib/types";
 
 function serializeMap(doc: MapDoc): string {
   return JSON.stringify(doc, null, 2);
+}
+
+/** Color is the one user-controlled field that flows straight into a live
+ *  CSS `background`/SVG `fill`. An arbitrary string there is an exfiltration
+ *  vector — `url(https://attacker/x)` fires a network request the moment the
+ *  card renders — and an attribute-injection in the PNG export. So accept
+ *  only a literal hex color; a hand-edited or hostile file falls back to a
+ *  safe default (this also guards the cloud path, since the API re-parses). */
+const HEX_COLOR_RE = /^#[0-9a-f]{3}([0-9a-f]{3})?$/i;
+function safeColor(v: unknown, fallback: string): string {
+  return typeof v === "string" && HEX_COLOR_RE.test(v) ? v : fallback;
+}
+
+/** Keep only finite {x,y} — never persist extra attacker-supplied keys. */
+function safeXY(v: unknown, fallback: XYPosition): XYPosition {
+  if (
+    v &&
+    typeof v === "object" &&
+    Number.isFinite((v as XYPosition).x) &&
+    Number.isFinite((v as XYPosition).y)
+  ) {
+    const { x, y } = v as XYPosition;
+    return { x, y };
+  }
+  return fallback;
+}
+
+/** Whitelist the camera to finite {x,y,zoom}; drop anything malformed. */
+function safeViewport(v: unknown): MapDoc["viewport"] {
+  if (
+    v &&
+    typeof v === "object" &&
+    Number.isFinite((v as { x: number }).x) &&
+    Number.isFinite((v as { y: number }).y) &&
+    Number.isFinite((v as { zoom: number }).zoom)
+  ) {
+    const { x, y, zoom } = v as { x: number; y: number; zoom: number };
+    return { x, y, zoom };
+  }
+  return undefined;
 }
 
 /** Parse + validate a saved map. Unknown regions fall back to off-body so
@@ -35,13 +76,8 @@ export function parseMapJson(json: string): MapDoc {
       location: known ? p.location! : "off-front",
       depth: p.depth === "back" ? "back" : "front",
       offBody,
-      freePos:
-        p.freePos &&
-        Number.isFinite(p.freePos.x) &&
-        Number.isFinite(p.freePos.y)
-          ? p.freePos
-          : { x: BODY_W, y: 0 },
-      color: typeof p.color === "string" ? p.color : PALETTE[i % 8],
+      freePos: safeXY(p.freePos, { x: BODY_W, y: 0 }),
+      color: safeColor(p.color, PALETTE[i % 8]),
       fontSize: p.fontSize === "s" || p.fontSize === "l" ? p.fontSize : "m",
       bold: !!p.bold,
       shape:
@@ -71,7 +107,7 @@ export function parseMapJson(json: string): MapDoc {
       id: typeof a.id === "string" ? a.id : newId("arrow"),
       sourceId: a.sourceId,
       targetId: a.targetId,
-      color: typeof a.color === "string" ? a.color : ARROW_COLORS[0],
+      color: safeColor(a.color, ARROW_COLORS[0]),
       label:
         typeof a.label === "string" && a.label.trim()
           ? a.label.trim().slice(0, 40)
@@ -87,7 +123,7 @@ export function parseMapJson(json: string): MapDoc {
         : 1,
     autoScale: raw.autoScale !== false,
     view: raw.view === "back" ? "back" : "front",
-    viewport: raw.viewport,
+    viewport: safeViewport(raw.viewport),
   };
 }
 

@@ -5,7 +5,10 @@
   --canvas: #f7f5f1;
   --ink: #3a3733;
   --ink-soft: #6f6a62;
-  --ink-faint: #a8a29a;
+  /* Darkened from #a8a29a (~2.3:1 on --canvas, a WCAG AA fail) to ~3.7:1 —
+     passes AA for large text with margin while staying the quietest tier.
+     Kept lighter than --ink-soft so the caption/hint hierarchy survives. */
+  --ink-faint: #847d72;
   --line: #e4e0d8;
   --panel: rgba(253, 252, 250, 0.92);
   --accent: #7d8b74; /* muted sage — indicator / focus */
@@ -34,6 +37,20 @@ body {
   color: var(--ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* ————— Keyboard focus —————
+   Nothing showed a focus state before, so keyboard and switch users had no
+   idea where they were. A single calm accent ring on real keyboard focus
+   only (:focus-visible never fires on mouse click). Static — no motion, so
+   nothing to gate on reduced-motion. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.react-flow__node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 /* ————— Part card lift choreography —————

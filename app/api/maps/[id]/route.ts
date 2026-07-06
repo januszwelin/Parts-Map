@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/db";
 import { maps } from "@/db/schema";
 import { parseMapJson } from "@/lib/persistence";
+import { readCappedText } from "../read-body";
 
 const MAX_BODY_BYTES = 1_000_000;
 const UUID_RE =
@@ -14,14 +15,6 @@ const UUID_RE =
  *  literal and throw a raw 500 — fail cleanly instead. */
 function badId(id: string) {
   return !UUID_RE.test(id);
-}
-
-async function ownsMap(id: string, userId: string): Promise<boolean> {
-  const [row] = await db
-    .select({ id: maps.id })
-    .from(maps)
-    .where(and(eq(maps.id, id), eq(maps.userId, userId)));
-  return !!row;
 }
 
 export async function GET(
@@ -53,11 +46,8 @@ export async function PUT(
   }
   const { id } = await params;
   if (badId(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (!(await ownsMap(id, session.user.id))) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) {
+  const text = await readCappedText(request, MAX_BODY_BYTES);
+  if (text === null) {
     return NextResponse.json({ error: "Map is too large" }, { status: 413 });
   }
   let body: { title?: unknown; doc?: unknown };
@@ -77,11 +67,15 @@ export async function PUT(
       return NextResponse.json({ error: "Invalid map" }, { status: 400 });
     }
   }
+  // Ownership is enforced *in the statement*: filtering by userId here (not
+  // in a prior read) makes the check atomic — no TOCTOU window, one round
+  // trip. An empty result means the map is gone or not this user's → 404.
   const [row] = await db
     .update(maps)
     .set(patch)
-    .where(eq(maps.id, id))
+    .where(and(eq(maps.id, id), eq(maps.userId, session.user.id)))
     .returning({ id: maps.id, title: maps.title, updatedAt: maps.updatedAt });
+  if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(row);
 }
 
@@ -95,9 +89,12 @@ export async function DELETE(
   }
   const { id } = await params;
   if (badId(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (!(await ownsMap(id, session.user.id))) {
+  const deleted = await db
+    .delete(maps)
+    .where(and(eq(maps.id, id), eq(maps.userId, session.user.id)))
+    .returning({ id: maps.id });
+  if (!deleted.length) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  await db.delete(maps).where(eq(maps.id, id));
   return NextResponse.json({ ok: true });
 }

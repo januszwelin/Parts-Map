@@ -15,6 +15,8 @@ import {
   boolean,
   jsonb,
   uuid,
+  integer,
+  bigint,
   index,
 } from "drizzle-orm/pg-core";
 import type { MapDoc } from "@/lib/types";
@@ -90,6 +92,18 @@ export const verification = pgTable(
   },
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
+
+/** BetterAuth's rate-limit counters, persisted so limits hold across
+ *  serverless instances (see lib/auth.ts `rateLimit.storage: "database"`).
+ *  Field NAMES must match better-auth's model (`key`/`count`/`lastRequest`);
+ *  the DB column strings are ours. Not linked to `user` — it's keyed by
+ *  IP/path, and rows expire on their own. */
+export const rateLimit = pgTable("rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").unique(),
+  count: integer("count"),
+  lastRequest: bigint("last_request", { mode: "number" }),
+});
 
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),

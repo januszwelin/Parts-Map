@@ -8,6 +8,13 @@
       "when": 1783328540056,
       "tag": "0000_odd_ego",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783348085744,
+      "tag": "0001_overconfident_steel_serpent",
+      "breakpoints": true
     }
   ]
 }

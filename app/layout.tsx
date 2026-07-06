@@ -29,8 +29,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // Deliberately NOT locking maximumScale / userScalable: disabling browser
+  // pinch-zoom is a WCAG 1.4.4 failure for low-vision users. React Flow owns
+  // pinch *inside the canvas* on its own, so the page-level gesture can stay
+  // available for the chrome and text without fighting the canvas.
   viewportFit: "cover",
   themeColor: "#f7f5f1",
 };

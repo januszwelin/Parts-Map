@@ -15,10 +15,14 @@ export function WelcomeModal({
   open,
   onClose,
   onStartTour,
+  onExplore,
 }: {
   open: boolean;
   onClose: () => void;
   onStartTour: () => void;
+  /** Load a small pre-built example system so a newcomer has something to
+   *  react to instead of a bare outline. */
+  onExplore: () => void;
 }) {
   if (!open) return null;
   return (
@@ -52,11 +56,24 @@ export function WelcomeModal({
           <button
             className="rounded-xl px-4 py-2.5 text-sm hover:bg-black/5"
             style={{ color: "var(--ink-soft)" }}
+            onClick={onExplore}
+          >
+            Explore an example
+          </button>
+          <button
+            className="rounded-xl px-4 py-2.5 text-sm hover:bg-black/5"
+            style={{ color: "var(--ink-soft)" }}
             onClick={onClose}
           >
-            Try it out
+            Start blank
           </button>
         </div>
+        <p
+          className="mt-4 text-[11px] leading-relaxed"
+          style={{ color: "var(--ink-faint)" }}
+        >
+          Your map stays on this device unless you save it.
+        </p>
       </div>
     </div>
   );

@@ -15,6 +15,9 @@ export type AppApi = {
   setDepth: (id: string, depth: Depth) => void;
   endResize: (id: string) => void;
   updateArrow: (id: string, patch: Partial<Arrow>) => void;
+  /** Swap an arrow's source and target — IFS direction ("who protects
+   *  whom") matters, and this beats delete-and-redraw. */
+  reverseArrow: (id: string) => void;
   deleteArrow: (id: string) => void;
   /** Select an arrow (opens its popover) — used by the label pill. */
   selectArrow: (id: string) => void;

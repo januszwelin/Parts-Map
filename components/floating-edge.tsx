@@ -162,6 +162,14 @@ export function FloatingEdge({
               >
                 <ArrowLabelInput key={id} id={id} label={data?.label} />
                 <button
+                  aria-label="Reverse arrow direction"
+                  onClick={() => api.reverseArrow(id)}
+                  className="min-h-8 rounded-md px-2.5 py-1 text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                >
+                  ⇄ reverse
+                </button>
+                <button
                   aria-label="Delete arrow"
                   onClick={() => api.deleteArrow(id)}
                   className="min-h-8 rounded-md px-2.5 py-1 text-xs"

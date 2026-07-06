@@ -110,7 +110,15 @@ export default function SignInPage() {
         : await authClient.signUp.email({ email, password, name: name || email });
     if (err) {
       setStage("idle");
-      setError(err.message ?? "Something went wrong — try again.");
+      // Sign-in stays deliberately generic: a "no such user" vs "wrong
+      // password" distinction lets an attacker enumerate which emails have
+      // accounts. Sign-up can be specific (users need to know an email is
+      // already taken so they can switch to signing in).
+      setError(
+        mode === "in"
+          ? "Email or password is incorrect."
+          : (err.message ?? "Couldn't create your account — try again."),
+      );
       return;
     }
     // Success: stay disabled through the navigation so the button can't
