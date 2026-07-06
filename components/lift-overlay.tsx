@@ -44,10 +44,14 @@ export function LiftOverlay({
 
   return (
     <div style={{ position: "absolute", zIndex: 1200, pointerEvents: "none" }}>
+      {/* 1×1, not 0×0: Blink won't paint the overflow of a zero-area
+          outer <svg>, so the leader line vanished in Chromium browsers
+          (Firefox painted it). A 1px viewport makes Blink paint the
+          overflowing path; its geometry is unchanged. */}
       <svg
         style={{ position: "absolute", overflow: "visible", left: 0, top: 0 }}
-        width={0}
-        height={0}
+        width={1}
+        height={1}
       >
         <path
           ref={leaderRef}

@@ -153,8 +153,14 @@ export const AnchorConstellation = React.memo(function AnchorConstellation({
   return (
     <svg
       className="anchor-constellation"
-      width={0}
-      height={0}
+      /* 1×1, not 0×0: Blink (Chrome/Edge/Opera) refuses to paint the
+         overflowing children of a zero-area outer <svg> even with
+         overflow:visible (Firefox paints them) — so the dots were
+         invisible in every Chromium browser. A 1px viewport is enough
+         to make Blink paint the overflow; positioning is unchanged
+         (children are drawn at flow coords from the 0,0 origin). */
+      width={1}
+      height={1}
       style={{
         position: "absolute",
         left: 0,
@@ -167,7 +173,7 @@ export const AnchorConstellation = React.memo(function AnchorConstellation({
       aria-hidden
     >
       <defs>
-        {/* userSpaceOnUse: the svg box is 0×0 with visible overflow, so
+        {/* userSpaceOnUse: the svg box is 1×1 with visible overflow, so
             bounding-box units would collapse — flow units only. */}
         <clipPath id="anchor-spotlight" clipPathUnits="userSpaceOnUse">
           <circle
