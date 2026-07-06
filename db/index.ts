@@ -13,5 +13,22 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
 
-const sql = neon(process.env.DATABASE_URL!);
-export const db = drizzle(sql, { schema });
+/* Lazy: constructing the client at module scope means any build-time
+   evaluation of a route that imports `db` (e.g. Next.js collecting page
+   data) crashes if DATABASE_URL isn't set yet, even for routes never
+   actually invoked. Deferring to first use confines the failure to
+   requests that really need the database. */
+let _db: ReturnType<typeof drizzle<typeof schema>> | undefined;
+
+function getDb() {
+  if (!_db) {
+    _db = drizzle(neon(process.env.DATABASE_URL!), { schema });
+  }
+  return _db;
+}
+
+export const db = new Proxy({} as ReturnType<typeof drizzle<typeof schema>>, {
+  get(_target, prop, receiver) {
+    return Reflect.get(getDb(), prop, receiver);
+  },
+});
