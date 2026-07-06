@@ -113,6 +113,9 @@ export function MyMapsModal({
   };
 
   const saveCurrent = async () => {
+    // Enter in the title field and the Save button share this path — the
+    // latch stops a double-fire from creating two identical cloud maps.
+    if (busyId) return;
     const title = saveTitle.trim() || "Untitled map";
     setBusyId("__save__");
     try {
@@ -171,7 +174,7 @@ export function MyMapsModal({
             disabled={busyId === "__save__"}
             onClick={saveCurrent}
           >
-            Save
+            {busyId === "__save__" ? "Saving…" : "Save"}
           </button>
         </div>
 
@@ -200,11 +203,12 @@ export function MyMapsModal({
                     Unsaved changes — open anyway?
                   </span>
                   <button
-                    className="rounded-md px-2 py-1 text-[11px]"
+                    className="rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
                     style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                    disabled={busyId === row.id}
                     onClick={() => doOpen(row)}
                   >
-                    Open anyway
+                    {busyId === row.id ? "Opening…" : "Open anyway"}
                   </button>
                   <button
                     className="rounded-md px-2 py-1 text-[11px]"
@@ -220,12 +224,12 @@ export function MyMapsModal({
                     Delete “{row.title}”?
                   </span>
                   <button
-                    className="rounded-md px-2 py-1 text-[11px]"
+                    className="rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
                     style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
                     disabled={busyId === row.id}
                     onClick={() => doDelete(row.id)}
                   >
-                    Delete
+                    {busyId === row.id ? "Deleting…" : "Delete"}
                   </button>
                   <button
                     className="rounded-md px-2 py-1 text-[11px]"
@@ -269,17 +273,18 @@ export function MyMapsModal({
                     </span>
                   </div>
                   <button
-                    className="shrink-0 rounded-md px-2.5 py-1 text-[11px]"
+                    className="shrink-0 rounded-md px-2.5 py-1 text-[11px] disabled:opacity-60"
                     style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink)" }}
-                    disabled={busyId === row.id}
+                    disabled={busyId !== null}
                     onClick={() => requestOpen(row)}
                   >
-                    Open
+                    {busyId === row.id ? "Opening…" : "Open"}
                   </button>
                   <button
                     aria-label="Delete map"
-                    className="shrink-0 rounded-md px-2.5 py-1 text-[11px]"
+                    className="shrink-0 rounded-md px-2.5 py-1 text-[11px] disabled:opacity-60"
                     style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                    disabled={busyId !== null}
                     onClick={() => setConfirmDeleteId(row.id)}
                   >
                     delete

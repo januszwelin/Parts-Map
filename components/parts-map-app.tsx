@@ -1917,7 +1917,12 @@ function PartsMapApp() {
    *  to cloud" update it in place instead of always creating a new one.
    *  Cleared by a file load/import and by opening a different cloud map. */
   const cloudDocRef = useRef<{ id: string; title: string } | null>(null);
+  /** In-flight latch: "Save to cloud" lives in a menu that closes on tap,
+   *  so nothing else stops a double-tap from creating two cloud copies. */
+  const cloudSavingRef = useRef(false);
   const saveToCloud = useCallback(async () => {
+    if (cloudSavingRef.current) return;
+    cloudSavingRef.current = true;
     const doc: MapDoc = {
       version: 1,
       parts,
@@ -1926,10 +1931,19 @@ function PartsMapApp() {
       autoScale,
       viewport: rf.getViewport(),
     };
+    setNotice({ text: "Saving to your maps…", key: Date.now() });
     try {
       if (cloudDocRef.current) {
-        await updateMap(cloudDocRef.current.id, { doc });
-      } else {
+        try {
+          await updateMap(cloudDocRef.current.id, { doc });
+        } catch (e) {
+          // The mirrored map was deleted (e.g. in My Maps) — fall back to
+          // saving a fresh copy instead of failing on every save forever.
+          if (!(e instanceof CloudError && e.status === 404)) throw e;
+          cloudDocRef.current = null;
+        }
+      }
+      if (!cloudDocRef.current) {
         const title = `Parts Map – ${new Date().toISOString().slice(0, 10)}`;
         const created = await createMap(title, doc);
         cloudDocRef.current = { id: created.id, title: created.title };
@@ -1941,6 +1955,8 @@ function PartsMapApp() {
         text: e instanceof CloudError ? e.message : "Couldn't save to your maps.",
         key: Date.now(),
       });
+    } finally {
+      cloudSavingRef.current = false;
     }
   }, [parts, arrows, bodyScale, autoScale, rf]);
   const onOpenCloudMap = useCallback(

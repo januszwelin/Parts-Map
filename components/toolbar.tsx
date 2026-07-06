@@ -61,12 +61,26 @@ export function Toolbar(props: {
   const [bodyOpen, setBodyOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const { data: session } = authClient.useSession();
-  const deleteAccount = () => {
-    setConfirmDelete(false);
-    setAccountOpen(false);
-    setSheetOpen(false);
-    authClient.deleteUser().then(() => window.location.reload());
+  const deleteAccount = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    // BetterAuth's client resolves with { error } instead of throwing —
+    // reloading unconditionally would tell the person their account was
+    // deleted when it wasn't (e.g. a stale session needing a fresh
+    // sign-in). Only a confirmed success reloads.
+    const { error } = await authClient.deleteUser();
+    if (error) {
+      setDeleting(false);
+      setDeleteError(
+        error.message ?? "Couldn't delete — sign in again and retry.",
+      );
+      return;
+    }
+    window.location.reload();
   };
   const fileRef = useRef<HTMLInputElement>(null);
   const submit = () => {
@@ -80,6 +94,7 @@ export function Toolbar(props: {
     setBodyOpen(false);
     setAccountOpen(false);
     setConfirmDelete(false);
+    setDeleteError(null);
   };
   const btn =
     "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-10";
@@ -265,18 +280,28 @@ export function Toolbar(props: {
                     <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                       Delete your account and all cloud maps?
                     </p>
+                    {deleteError && (
+                      <p className="pb-1.5 text-[11px]" style={{ color: "#A05B5B" }}>
+                        {deleteError}
+                      </p>
+                    )}
                     <div className="flex gap-1.5">
                       <button
-                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        className="flex-1 rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
                         style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                        disabled={deleting}
                         onClick={deleteAccount}
                       >
-                        Delete
+                        {deleting ? "Deleting…" : "Delete"}
                       </button>
                       <button
                         className="flex-1 rounded-md px-2 py-1 text-[11px]"
                         style={{ color: "var(--ink-soft)" }}
-                        onClick={() => setConfirmDelete(false)}
+                        disabled={deleting}
+                        onClick={() => {
+                          setConfirmDelete(false);
+                          setDeleteError(null);
+                        }}
                       >
                         Cancel
                       </button>
@@ -431,18 +456,28 @@ export function Toolbar(props: {
                     <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                       Delete your account and all cloud maps?
                     </p>
+                    {deleteError && (
+                      <p className="pb-1.5 text-[11px]" style={{ color: "#A05B5B" }}>
+                        {deleteError}
+                      </p>
+                    )}
                     <div className="flex gap-1.5">
                       <button
-                        className="flex-1 rounded-md px-2 py-1.5 text-[11px]"
+                        className="flex-1 rounded-md px-2 py-1.5 text-[11px] disabled:opacity-60"
                         style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                        disabled={deleting}
                         onClick={deleteAccount}
                       >
-                        Delete
+                        {deleting ? "Deleting…" : "Delete"}
                       </button>
                       <button
                         className="flex-1 rounded-md px-2 py-1.5 text-[11px]"
                         style={{ color: "var(--ink-soft)" }}
-                        onClick={() => setConfirmDelete(false)}
+                        disabled={deleting}
+                        onClick={() => {
+                          setConfirmDelete(false);
+                          setDeleteError(null);
+                        }}
                       >
                         Cancel
                       </button>

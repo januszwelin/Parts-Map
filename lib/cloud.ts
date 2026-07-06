@@ -9,7 +9,14 @@
 
 import type { MapDoc } from "@/lib/types";
 
-export class CloudError extends Error {}
+export class CloudError extends Error {
+  /** HTTP status, when the failure came from a response (vs. network). */
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export type MapSummary = { id: string; title: string; updatedAt: string };
 export type MapRecord = MapSummary & { doc: MapDoc };
@@ -17,15 +24,16 @@ export type MapRecord = MapSummary & { doc: MapDoc };
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     if (res.status === 401) {
-      throw new CloudError("Sign in to use cloud maps.");
+      throw new CloudError("Sign in to use cloud maps.", 401);
     }
     if (res.status === 404) {
-      throw new CloudError("That map is gone — it may have been deleted.");
+      throw new CloudError("That map is gone — it may have been deleted.", 404);
     }
     const body = await res.json().catch(() => null);
     throw new CloudError(
       (body && typeof body.error === "string" && body.error) ||
         "Something went wrong reaching your maps.",
+      res.status,
     );
   }
   return res.json() as Promise<T>;
