@@ -40,6 +40,16 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# AI tooling & internal planning docs (not part of the shipped app)
+/.agents/
+/.claude/
+/CLAUDE.md
+/AGENTS.md
+/parts_map_spec.md
+/parts_map_build_prompt.md
+/parts_map_handoff_checklist.md
+/parts_map_ui_enhancement_prompt.md
+
 # editors
 .vscode/*
 !.vscode/settings.json
