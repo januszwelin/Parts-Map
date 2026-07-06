@@ -34,7 +34,8 @@ export function ImportModal({
         <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--ink-soft)" }}>
           One part per line. Optionally add a location after a comma or tab —
           e.g. <span className="font-mono">Protector, solar plexus</span>.
-          Anything unmatched lands beside the body, ready to place.
+          Anything unmatched lands in free space below the figure, ready to
+          place.
         </p>
         <textarea
           className="mt-3 w-full resize-none rounded-xl p-3 text-sm outline-none"

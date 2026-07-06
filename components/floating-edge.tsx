@@ -20,6 +20,7 @@ import { ARROW_COLORS } from "@/lib/tuning";
 import { rectEdgePoint } from "@/lib/geometry";
 import { panelStyle } from "@/lib/ui";
 import { useAppApi } from "@/hooks/use-app-api";
+import { useIsCoarse } from "@/hooks/use-media";
 
 export type FloatingEdgeType = Edge<
   { color: string; label?: string },
@@ -84,6 +85,7 @@ export function FloatingEdge({
   data,
 }: EdgeProps<FloatingEdgeType>) {
   const api = useAppApi();
+  const coarse = useIsCoarse();
   const sn = useInternalNode(source);
   const tn = useInternalNode(target);
   if (!sn || !tn) return null;
@@ -142,7 +144,7 @@ export function FloatingEdge({
         path={path}
         markerEnd={markerEnd}
         style={style}
-        interactionWidth={24}
+        interactionWidth={coarse ? 44 : 24}
       />
       {(selected || data?.label) && (
         <EdgeLabelRenderer>
@@ -162,10 +164,10 @@ export function FloatingEdge({
                 <button
                   aria-label="Delete arrow"
                   onClick={() => api.deleteArrow(id)}
-                  className="flex h-7 w-7 items-center justify-center rounded-md text-xs hover:bg-black/5"
-                  style={{ color: "var(--ink-soft)" }}
+                  className="min-h-8 rounded-md px-2.5 py-1 text-xs"
+                  style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
                 >
-                  ✕
+                  delete
                 </button>
                 <div className="flex w-full items-center justify-center gap-0.5">
                   {ARROW_COLORS.map((c) => (

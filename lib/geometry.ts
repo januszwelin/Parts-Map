@@ -2,16 +2,17 @@
    GEOMETRY & EASING
    ════════════════════════════════════════════════════════════════════ */
 
-import type { XYPosition } from "@xyflow/react";
+import type { CoordinateExtent, XYPosition } from "@xyflow/react";
 import {
   BODY_H,
   BODY_W,
   VIEW_GAP,
   SCENE_W,
   SNAP_FRAC,
+  EXTENT_MARGIN,
 } from "@/lib/tuning";
 import { REGIONS, type RegionDef } from "@/lib/regions";
-import type { Depth } from "@/lib/types";
+import type { Depth, Part } from "@/lib/types";
 
 /** Center x of a figure in flow space: the front figure sits on the
  *  viewer's left, the back figure on the viewer's right, VIEW_GAP apart. */
@@ -48,6 +49,34 @@ export function offBodySuggestion(
     x: (region.anchor.x - 0.5) * SCENE_W * bodyScale,
     y: (region.anchor.y - 0.5) * BODY_H * bodyScale,
   };
+}
+
+/** Pan bounds for the canvas: the scaled two-figure scene unioned with
+ *  every off-body part's freePos, padded by EXTENT_MARGIN (scaled with
+ *  the body so the margin stays proportionate). Deliberately depends on
+ *  nothing that changes mid-drag (only `parts` and `bodyScale`, both of
+ *  which only change on a committed mutation) — the drag/camera rAF
+ *  loops never trigger a recompute, they simply get clamped by React
+ *  Flow like any other viewport write. */
+export function mapExtent(parts: Part[], bodyScale: number): CoordinateExtent {
+  let minX = (-SCENE_W * bodyScale) / 2;
+  let maxX = (SCENE_W * bodyScale) / 2;
+  let minY = (-BODY_H * bodyScale) / 2;
+  let maxY = (BODY_H * bodyScale) / 2;
+  for (const p of parts) {
+    if (!p.offBody) continue;
+    const halfW = (p.w ?? 160) / 2 + 40;
+    const halfH = (p.h ?? 48) / 2 + 40;
+    minX = Math.min(minX, p.freePos.x - halfW);
+    maxX = Math.max(maxX, p.freePos.x + halfW);
+    minY = Math.min(minY, p.freePos.y - halfH);
+    maxY = Math.max(maxY, p.freePos.y + halfH);
+  }
+  const margin = EXTENT_MARGIN * bodyScale;
+  return [
+    [minX - margin, minY - margin],
+    [maxX + margin, maxY + margin],
+  ];
 }
 
 /** Magnet-snappable regions per figure.
@@ -150,13 +179,33 @@ export function resolveMagnet(
   return { near, hit, snapR };
 }
 
+/** Where an unmatched import lands: a wrapped grid just below the front
+ *  figure, so a batch of "couldn't place this" parts is immediately
+ *  visible on screen — the old fallback (the off-right zone's single
+ *  suggestion point, staggered a few px per line) put a big batch far to
+ *  one side, easy to miss entirely. Deterministic and scale-aware, so it
+ *  always lands inside the canvas's pan bounds (mapExtent above). */
+const FREE_SPAWN_COLS = 3;
+const FREE_SPAWN_DX = 170;
+const FREE_SPAWN_DY = 64;
+export function freeSpawnGrid(index: number, bodyScale: number): XYPosition {
+  const x0 = figureCenterX("front", bodyScale) - (BODY_W * bodyScale) / 2;
+  const y0 = (BODY_H * bodyScale) / 2 + 80;
+  const col = index % FREE_SPAWN_COLS;
+  const row = Math.floor(index / FREE_SPAWN_COLS);
+  return { x: x0 + col * FREE_SPAWN_DX, y: y0 + row * FREE_SPAWN_DY };
+}
+
 /** Closest off-body zone to a free drop point — gives a free placement a
  *  readable location for the parts list ("Behind me", "Above the head"…). */
 export function nearestOffZone(p: XYPosition, bodyScale: number): string {
   let bestKey = "off-front";
   let bestD = Infinity;
   for (const r of REGIONS) {
-    if (!r.offBody) continue;
+    // "Free space" is reserved for imports/the picker's own fallback — a
+    // manual off-body drop should always read as a direction ("Behind
+    // me", "Above the head", …), never the generic catch-all.
+    if (!r.offBody || r.freeZone) continue;
     const a = offBodySuggestion(r, bodyScale);
     const d = Math.hypot(p.x - a.x, p.y - a.y);
     if (d < bestD) {

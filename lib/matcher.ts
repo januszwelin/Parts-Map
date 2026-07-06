@@ -97,7 +97,7 @@ export function interpretLocations(
 ): Placement[] {
   return lines.map((line) => {
     const m = line.locationText ? matchRegion(line.locationText) : null;
-    if (!m) return { location: "off-right", depth: "front", offBody: true };
+    if (!m) return { location: "off-free", depth: "front", offBody: true };
     const region = REGION_BY_KEY[m.key];
     if (region.offBody) {
       return {

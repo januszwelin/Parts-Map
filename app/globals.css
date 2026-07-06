@@ -215,6 +215,33 @@ input[type="range"]::-moz-range-thumb {
   pointer-events: none;
 }
 
+/* Touch has no hover, so the hover-only reveal above leaves the dots
+   permanently invisible on phones. Coarse pointers get a quiet always-on
+   affordance instead — a small, faint dot naming "arrows start here" —
+   that brightens to the full-size dot once the card is selected (still
+   pointer-events: none until then, so it's a hint, not a hit target: an
+   unselected drag still grabs the card, exactly as on desktop). */
+@media (pointer: coarse) {
+  .part-source-handle.react-flow__handle {
+    opacity: 0.45;
+  }
+  .part-source-handle.react-flow__handle::after {
+    width: 9px;
+    height: 9px;
+    margin: -4.5px 0 0 -4.5px;
+  }
+  .react-flow__node.selected .part-source-handle,
+  .react-flow__node.connectingfrom .part-source-handle {
+    opacity: 1;
+  }
+  .react-flow__node.selected .part-source-handle::after,
+  .react-flow__node.connectingfrom .part-source-handle::after {
+    width: 11px;
+    height: 11px;
+    margin: -5.5px 0 0 -5.5px;
+  }
+}
+
 /* NodeResizer styling — quiet, small */
 .react-flow__resize-control.handle {
   width: 8px;
@@ -311,6 +338,23 @@ input[type="range"]::-moz-range-thumb {
   }
 }
 
+/* ————— Coach mark arrow —————
+   The guided tour's callouts point at real chrome with a small arrow
+   that breathes in place — the same unhurried cadence as anchor-pulse,
+   so the tour's motion language matches the canvas's own. */
+@keyframes coach-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(3px);
+  }
+}
+.coach-bob {
+  animation: coach-bob 1150ms cubic-bezier(0.25, 0.7, 0.4, 1) infinite;
+}
+
 /* ————— Reduced motion —————
    The drag-follow camera already opts out (handled in JS); quiet the
    decorative animations too. */
@@ -338,5 +382,8 @@ input[type="range"]::-moz-range-thumb {
   }
   .part-inner {
     transition: box-shadow 120ms ease;
+  }
+  .coach-bob {
+    animation: none;
   }
 }

@@ -17,8 +17,11 @@ function serializeMap(doc: MapDoc): string {
 }
 
 /** Parse + validate a saved map. Unknown regions fall back to off-body so
- *  a config rename never loses a part. Throws on malformed input. */
-function parseMap(json: string): MapDoc {
+ *  a config rename never loses a part. Throws on malformed input. Pure
+ *  and server-safe (no browser APIs) — exported so the maps API routes
+ *  can heal/validate a doc before it ever reaches the database, not just
+ *  file loads. */
+export function parseMapJson(json: string): MapDoc {
   const raw = JSON.parse(json) as Partial<MapDoc>;
   if (!raw || !Array.isArray(raw.parts) || !Array.isArray(raw.arrows)) {
     throw new Error("Not a Parts Map file");
@@ -103,7 +106,7 @@ export function loadMapFile(file: File): Promise<MapDoc> {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        resolve(parseMap(String(reader.result)));
+        resolve(parseMapJson(String(reader.result)));
       } catch (e) {
         reject(e);
       }

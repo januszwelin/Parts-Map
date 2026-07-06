@@ -60,7 +60,7 @@ import {
   ARROW_COLORS,
 } from "@/lib/tuning";
 import { REGIONS, REGION_BY_KEY } from "@/lib/regions";
-import { newId, type Depth, type Part, type Arrow } from "@/lib/types";
+import { newId, type Depth, type Part, type Arrow, type MapDoc } from "@/lib/types";
 import {
   figureCenterX,
   anchorToFlow,
@@ -70,6 +70,8 @@ import {
   figureUnder,
   resolveMagnet,
   nearestOffZone,
+  mapExtent,
+  freeSpawnGrid,
   easeOutBack,
   easeInOutCubic,
   easeOutCubic,
@@ -80,7 +82,10 @@ import {
   parseImportText,
 } from "@/lib/matcher";
 import { downloadMap, loadMapFile } from "@/lib/persistence";
+import { createMap, updateMap, CloudError } from "@/lib/cloud";
 import { sndPlay, sndSetMuted, magnetTick } from "@/lib/sound";
+import { haptic } from "@/lib/haptics";
+import { getWelcomeSeen, setWelcomeSeen } from "@/lib/onboarding";
 import { partSurface } from "@/lib/part-utils";
 import { panelStyle } from "@/lib/ui";
 import { AppApiContext, type AppApi } from "@/hooks/use-app-api";
@@ -101,6 +106,9 @@ import {
 import { Toolbar, FrameMapButton } from "@/components/toolbar";
 import { PartsListPanel, PhonePartsSheet } from "@/components/parts-list";
 import { ImportModal } from "@/components/import-modal";
+import { WelcomeModal } from "@/components/welcome";
+import { MyMapsModal } from "@/components/my-maps";
+import { CoachMarks, TOUR_STEPS, type TourSnapshot } from "@/components/coach-marks";
 
 /* ════════════════════════════════════════════════════════════════════
    9. MAIN APP
@@ -241,6 +249,7 @@ function PartsMapApp() {
   useEffect(() => {
     sndSetMuted(!soundOn);
   }, [soundOn]);
+
   /** One-shot landing effects: card pop (via node data) + anchor ripple. */
   const [dropPop, setDropPop] = useState<{ id: string; key: number } | null>(
     null,
@@ -263,6 +272,85 @@ function PartsMapApp() {
   useEffect(() => {
     bodyScaleRef.current = bodyScale;
   }, [bodyScale]);
+
+  /* ——— onboarding: a first-run welcome, and an optional guided tour ———
+     The only localStorage this app touches, and only for a "have they
+     seen the welcome" boolean — no map data is ever stored (lib/onboarding.ts). */
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [framedTick, setFramedTick] = useState(0);
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  const tourBaselineRef = useRef<TourSnapshot | null>(null);
+  // Reading localStorage has to wait for the client (the initial render
+  // must match the server's, which has no localStorage to read) — this
+  // mount-only effect is the standard hydration-safe shape for that, not
+  // state genuinely worth deriving during render.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!getWelcomeSeen()) setWelcomeOpen(true);
+  }, []);
+  const closeWelcome = useCallback(() => {
+    setWelcomeOpen(false);
+    setWelcomeSeen();
+  }, []);
+  const startTour = useCallback(() => {
+    setWelcomeOpen(false);
+    setWelcomeSeen();
+    tourBaselineRef.current = {
+      partsCount: partsRef.current.length,
+      arrowsCount: arrowsRef.current.length,
+      selectedId,
+      listOpen,
+      exportMenuOpen,
+      framedTick,
+    };
+    setTourStep(0);
+  }, [selectedId, listOpen, exportMenuOpen, framedTick]);
+  const skipTour = useCallback(() => setTourStep(null), []);
+  /** The "?" button — always reopens the welcome choice, even mid-tour. */
+  const reopenWelcome = useCallback(() => {
+    setTourStep(null);
+    setWelcomeOpen(true);
+  }, []);
+  const tourSnapshot: TourSnapshot = useMemo(
+    () => ({
+      partsCount: parts.length,
+      arrowsCount: arrows.length,
+      selectedId,
+      listOpen,
+      exportMenuOpen,
+      framedTick,
+    }),
+    [parts.length, arrows.length, selectedId, listOpen, exportMenuOpen, framedTick],
+  );
+  // Advance (or end) the tour when the current step's real-world action
+  // has actually happened — never on a timer. A state machine over time
+  // (each step's "done" reads a baseline captured when it began) isn't
+  // expressible as a pure per-render derivation, so an effect is the
+  // right tool here, not a lint dodge.
+  useEffect(() => {
+    if (tourStep === null) return;
+    const baseline = tourBaselineRef.current;
+    if (!baseline) return;
+    if (!TOUR_STEPS[tourStep].done(tourSnapshot, baseline)) return;
+    if (tourStep + 1 >= TOUR_STEPS.length) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTourStep(null);
+      setNotice({ text: "That's the tour — this space is yours", key: Date.now() });
+    } else {
+      tourBaselineRef.current = tourSnapshot;
+      setTourStep(tourStep + 1);
+    }
+  }, [tourStep, tourSnapshot]);
+  /** On phone the parts list is a bottom sheet tall enough to cover the
+   *  frame-map button underneath it — if satisfying the "list" step (by
+   *  opening the ⋯ menu) has already advanced the tour to "frame" while
+   *  the list is still open, showing that callout would point at a
+   *  button the user can't even see yet. Hold it back until the list
+   *  itself closes; every other step is unaffected. */
+  const tourStepId = tourStep !== null ? TOUR_STEPS[tourStep].id : null;
+  const tourVisible =
+    tourStep !== null && !placing && !(listOpen && tourStepId !== "list");
 
   /* ——— undo: a bounded snapshot history of the map (parts + arrows).
          Body scale keeps its own pill Undo; viewport and selection are
@@ -491,47 +579,49 @@ function PartsMapApp() {
     [rf, glideViewport],
   );
 
-  /** Frame the whole map: both figures plus any off-body strays. On a
-   *  phone-width screen, frame the front figure (as on first open). */
-  const fitAll = useCallback(() => {
-    const el = wrapperRef.current;
-    if (!el) return;
-    const w = el.clientWidth;
-    const h = el.clientHeight;
-    const s = bodyScaleRef.current;
-    if (w < 640) {
-      const zoom = Math.min(1.1, (h * 0.82) / BODY_H, (w * 0.9) / BODY_W);
+  /** Frame the whole map: both figures plus any off-body strays — the
+   *  app's "home"/reset view on every screen size (an optional parts
+   *  array lets a just-committed import frame itself before the ref
+   *  catches up). Phone used to frame the front figure alone here; that
+   *  read as a dead end once the canvas gained real pan bounds (below),
+   *  so it now matches desktop and the Front/Back pill remains the way
+   *  to zoom into one figure. The *initial* camera effect above keeps
+   *  its own front-figure framing deliberately — first open is a
+   *  different moment than "take me home". */
+  const fitAll = useCallback(
+    (partsArr?: Part[]) => {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      const s = bodyScaleRef.current;
+      const list = partsArr ?? partsRef.current;
+      // The two-figure scene (gap included) scales linearly about flow 0,0.
+      let minX = (-SCENE_W * s) / 2;
+      let maxX = (SCENE_W * s) / 2;
+      let minY = (-BODY_H * s) / 2;
+      let maxY = (BODY_H * s) / 2;
+      for (const p of list) {
+        if (!p.offBody) continue;
+        const halfW = (p.w ?? 160) / 2 + 40;
+        const halfH = (p.h ?? 48) / 2 + 40;
+        minX = Math.min(minX, p.freePos.x - halfW);
+        maxX = Math.max(maxX, p.freePos.x + halfW);
+        minY = Math.min(minY, p.freePos.y - halfH);
+        maxY = Math.max(maxY, p.freePos.y + halfH);
+      }
+      const zoom = Math.max(
+        0.15,
+        Math.min(1.1, (w * 0.92) / (maxX - minX), (h * 0.82) / (maxY - minY)),
+      );
       glideViewport({
-        x: w / 2 - figureCenterX("front", s) * zoom,
-        y: h / 2,
+        x: w / 2 - ((minX + maxX) / 2) * zoom,
+        y: h / 2 - ((minY + maxY) / 2) * zoom,
         zoom,
       });
-      return;
-    }
-    // The two-figure scene (gap included) scales linearly about flow 0,0.
-    let minX = (-SCENE_W * s) / 2;
-    let maxX = (SCENE_W * s) / 2;
-    let minY = (-BODY_H * s) / 2;
-    let maxY = (BODY_H * s) / 2;
-    for (const p of partsRef.current) {
-      if (!p.offBody) continue;
-      const halfW = (p.w ?? 160) / 2 + 40;
-      const halfH = (p.h ?? 48) / 2 + 40;
-      minX = Math.min(minX, p.freePos.x - halfW);
-      maxX = Math.max(maxX, p.freePos.x + halfW);
-      minY = Math.min(minY, p.freePos.y - halfH);
-      maxY = Math.max(maxY, p.freePos.y + halfH);
-    }
-    const zoom = Math.max(
-      0.15,
-      Math.min(1.1, (w * 0.92) / (maxX - minX), (h * 0.82) / (maxY - minY)),
-    );
-    glideViewport({
-      x: w / 2 - ((minX + maxX) / 2) * zoom,
-      y: h / 2 - ((minY + maxY) / 2) * zoom,
-      zoom,
-    });
-  }, [glideViewport]);
+    },
+    [glideViewport],
+  );
 
   useEffect(
     () => () => {
@@ -1115,6 +1205,7 @@ function PartsMapApp() {
           "box-shadow 180ms cubic-bezier(0.33, 1, 0.68, 1)";
       }
       sndPlay("lift");
+      haptic(6);
       setLift({ id: node.id, isTouch });
       setSelectedEdgeId(null);
       startLiftLoop();
@@ -1203,6 +1294,7 @@ function PartsMapApp() {
         );
         setDragOverride(null);
         sndPlay("free");
+        haptic(6);
       } else {
         // On-body: the drop always lands on the targeted anchor — the
         // pulsing point the aim promised. Landing effects fire at
@@ -1224,7 +1316,7 @@ function PartsMapApp() {
               setDropPop({ id: info.id, key: now });
               setRipple({ pos: to, key: now });
               sndPlay("drop");
-              navigator.vibrate?.(8);
+              haptic(8);
             },
           });
         } else {
@@ -1509,6 +1601,7 @@ function PartsMapApp() {
     setPlacing(info);
     setPlacingTouch(false);
     sndPlay("lift");
+    haptic(6);
   }, []);
 
   /** Leave placement mode without creating anything — the typed name
@@ -1566,7 +1659,7 @@ function PartsMapApp() {
               setDropPop({ id, key: now });
               setRipple({ pos: to, key: now });
               sndPlay("drop");
-              navigator.vibrate?.(8);
+              haptic(8);
             },
           });
         } else {
@@ -1582,6 +1675,7 @@ function PartsMapApp() {
         };
         setParts((ps) => [...ps, part]);
         sndPlay("free");
+        haptic(6);
       }
       // Desktop: select so the popover is ready. Phone: stay hands-off —
       // auto-opening the edit sheet would bury the landing it just made.
@@ -1729,18 +1823,15 @@ function PartsMapApp() {
       if (!lines.length) return;
       const scale = bodyScaleRef.current;
       const placements = interpretLocations(lines, scale);
+      let freeCount = 0;
       const newParts: Part[] = lines.map((l, i) => {
         const pl = placements[i];
         let freePos = pl.freePos;
         if (pl.offBody && !freePos) {
-          // Unmatched bulk imports line up beside the body (its zone's
-          // suggestion), not in a screen-space corner.
-          const zone = REGION_BY_KEY[pl.location];
-          freePos = offBodySuggestion(
-            zone?.offBody ? zone : REGION_BY_KEY["off-left"],
-            scale,
-          );
-          freePos = { x: freePos.x + (i % 3) * 26, y: freePos.y + i * 16 };
+          // Unmatched: a visible grid below the front figure — a batch
+          // that all landed off in one corner (the old off-right
+          // fallback) was too easy to miss entirely.
+          freePos = freeSpawnGrid(freeCount++, scale);
         } else if (freePos) {
           // stagger matched off-body zones so repeats don't stack
           freePos = { x: freePos.x + (i % 3) * 26, y: freePos.y + i * 16 };
@@ -1759,10 +1850,22 @@ function PartsMapApp() {
         };
       });
       pushHistory("import", `imported ${newParts.length} parts`);
-      setParts((ps) => [...ps, ...newParts]);
+      const updated = [...partsRef.current, ...newParts];
+      setParts(updated);
       autoArmedRef.current = true;
+      const n = newParts.length;
+      setNotice({
+        text:
+          freeCount > 0
+            ? `Imported ${n} part${n === 1 ? "" : "s"} · ${freeCount} in free space`
+            : `Imported ${n} part${n === 1 ? "" : "s"}`,
+        key: Date.now(),
+      });
+      // Whole-map context orients better than zooming one cluster — an
+      // import can scatter across both figures and free space at once.
+      fitAll(updated);
     },
-    [pushHistory],
+    [pushHistory, fitAll],
   );
 
   /* ——— persistence ——— */
@@ -1779,30 +1882,83 @@ function PartsMapApp() {
     setNotice({ text: "Saved ✓", key: Date.now() });
   }, [parts, arrows, bodyScale, autoScale, rf]);
 
+  /** The reset choreography shared by every "replace the whole map" path
+   *  — file load and opening a cloud map alike. */
+  const applyLoadedDoc = useCallback(
+    (doc: MapDoc) => {
+      cancelPlacing();
+      cancelAnimationFrame(settleRafRef.current);
+      cancelAnimationFrame(scaleRafRef.current);
+      cancelAnimationFrame(restoreRafRef.current);
+      settlingRef.current = false;
+      setDragOverride(null);
+      setParts(doc.parts);
+      setArrows(doc.arrows);
+      setBodyScale(doc.bodyScale);
+      manualScaleRef.current = doc.bodyScale;
+      setAutoScale(doc.autoScale);
+      setSelectedId(null);
+      setSelectedEdgeId(null);
+      if (doc.viewport) rf.setViewport(doc.viewport);
+      // A fresh document: yesterday's history belongs to the old map.
+      historyRef.current = [];
+      setMeasuredDims(new Map());
+      dirtyRef.current = false;
+      // A loaded map may open crowded — let the auto-grow pass judge it.
+      autoArmedRef.current = true;
+    },
+    [rf, cancelPlacing],
+  );
+
+  /* ——— cloud maps (optional — signing in adds this on top of file
+         save/load, which keeps working with no account at all) ——— */
+  const [myMapsOpen, setMyMapsOpen] = useState(false);
+  /** Which cloud map (if any) the canvas currently mirrors — lets "Save
+   *  to cloud" update it in place instead of always creating a new one.
+   *  Cleared by a file load/import and by opening a different cloud map. */
+  const cloudDocRef = useRef<{ id: string; title: string } | null>(null);
+  const saveToCloud = useCallback(async () => {
+    const doc: MapDoc = {
+      version: 1,
+      parts,
+      arrows,
+      bodyScale,
+      autoScale,
+      viewport: rf.getViewport(),
+    };
+    try {
+      if (cloudDocRef.current) {
+        await updateMap(cloudDocRef.current.id, { doc });
+      } else {
+        const title = `Parts Map – ${new Date().toISOString().slice(0, 10)}`;
+        const created = await createMap(title, doc);
+        cloudDocRef.current = { id: created.id, title: created.title };
+      }
+      dirtyRef.current = false;
+      setNotice({ text: "Saved to your maps ✓", key: Date.now() });
+    } catch (e) {
+      setNotice({
+        text: e instanceof CloudError ? e.message : "Couldn't save to your maps.",
+        key: Date.now(),
+      });
+    }
+  }, [parts, arrows, bodyScale, autoScale, rf]);
+  const onOpenCloudMap = useCallback(
+    (id: string, title: string, doc: MapDoc) => {
+      applyLoadedDoc(doc);
+      cloudDocRef.current = { id, title };
+      setNotice({ text: `Opened “${title}”`, key: Date.now() });
+    },
+    [applyLoadedDoc],
+  );
+
   const onLoad = useCallback(
     async (file: File) => {
       try {
         const doc = await loadMapFile(file);
-        cancelPlacing();
-        cancelAnimationFrame(settleRafRef.current);
-        cancelAnimationFrame(scaleRafRef.current);
-        cancelAnimationFrame(restoreRafRef.current);
-        settlingRef.current = false;
-        setDragOverride(null);
-        setParts(doc.parts);
-        setArrows(doc.arrows);
-        setBodyScale(doc.bodyScale);
-        manualScaleRef.current = doc.bodyScale;
-        setAutoScale(doc.autoScale);
-        setSelectedId(null);
-        setSelectedEdgeId(null);
-        if (doc.viewport) rf.setViewport(doc.viewport);
-        // A fresh document: yesterday's history belongs to the old map.
-        historyRef.current = [];
-        setMeasuredDims(new Map());
-        dirtyRef.current = false;
-        // A loaded map may open crowded — let the auto-grow pass judge it.
-        autoArmedRef.current = true;
+        applyLoadedDoc(doc);
+        // A file load replaces whatever cloud map was open, if any.
+        cloudDocRef.current = null;
       } catch {
         setNotice({
           text: "Couldn't read that file — it doesn't look like a Parts Map JSON.",
@@ -1810,7 +1966,7 @@ function PartsMapApp() {
         });
       }
     },
-    [rf, cancelPlacing],
+    [applyLoadedDoc],
   );
 
   const onBodyScaleManual = useCallback((v: number) => {
@@ -2003,6 +2159,15 @@ function PartsMapApp() {
     return () => clearTimeout(t);
   }, [notice]);
 
+  /** Pan bounds: the scene plus any off-body strays, with breathing room.
+   *  Deliberately keyed on `parts`/`bodyScale` only — never on drag state —
+   *  so it's stable for the length of any gesture and only ever widens or
+   *  narrows on a committed mutation (add/move/delete/import/rescale). */
+  const translateExtent = useMemo(
+    () => mapExtent(parts, bodyScale),
+    [parts, bodyScale],
+  );
+
   /* ——— derived views: one parts array → nodes + list ——— */
   const nodes: Node[] = useMemo(() => {
     const posMap = derivePositions(parts, bodyScale);
@@ -2091,6 +2256,7 @@ function PartsMapApp() {
           connectOnClick={false}
           minZoom={0.15}
           maxZoom={4}
+          translateExtent={translateExtent}
           zoomOnDoubleClick={false}
           // The drag-follow camera owns edge-following during drags; RF's
           // own auto-pan would double-pan. Reduced motion turns our camera
@@ -2185,8 +2351,16 @@ function PartsMapApp() {
           onToggleList={() => setListOpen((v) => !v)}
           soundOn={soundOn}
           onToggleSound={() => setSoundOn((v) => !v)}
+          onShowWelcome={reopenWelcome}
+          onOpenMyMaps={() => setMyMapsOpen(true)}
+          onSaveToCloud={saveToCloud}
         />
-        <FrameMapButton onFrame={fitAll} />
+        <FrameMapButton
+          onFrame={() => {
+            fitAll();
+            setFramedTick((t) => t + 1);
+          }}
+        />
         {/* Parts list — a docked side panel on desktop, a bottom sheet on
             phones (hidden while dragging/placing, like the edit sheet). */}
         {isPhone ? (
@@ -2196,6 +2370,7 @@ function PartsMapApp() {
             open={listOpen && !lift && !placing}
             onReveal={revealPart}
             onClose={() => setListOpen(false)}
+            onExportMenuOpenChange={setExportMenuOpen}
           />
         ) : (
           <PartsListPanel
@@ -2206,6 +2381,7 @@ function PartsMapApp() {
             onSelect={setSelectedId}
             onReveal={revealPart}
             onClose={() => setListOpen(false)}
+            onExportMenuOpenChange={setExportMenuOpen}
           />
         )}
         {/* Phone card editor — bottom sheet; hides while dragging/placing
@@ -2255,6 +2431,20 @@ function PartsMapApp() {
           open={importOpen}
           onClose={() => setImportOpen(false)}
           onImport={doImport}
+        />
+        <MyMapsModal
+          open={myMapsOpen}
+          onClose={() => setMyMapsOpen(false)}
+          getCurrentDoc={() => ({
+            version: 1,
+            parts,
+            arrows,
+            bodyScale,
+            autoScale,
+            viewport: rf.getViewport(),
+          })}
+          isDirty={() => dirtyRef.current}
+          onOpenMap={onOpenCloudMap}
         />
         {parts.length === 0 && !placing && (
           <div className="fade-in pointer-events-none absolute inset-x-0 top-16 z-10 flex justify-center sm:top-20">
@@ -2317,6 +2507,17 @@ function PartsMapApp() {
             <option key={r.key} value={r.label} />
           ))}
         </datalist>
+        <WelcomeModal
+          open={welcomeOpen}
+          onClose={closeWelcome}
+          onStartTour={startTour}
+        />
+        {/* Hidden during tap-to-place (its own hint pill already carries
+            the guidance) and hidden behind an open phone list sheet
+            until the list itself closes — see tourVisible above. */}
+        {tourVisible && (
+          <CoachMarks step={tourStep!} snapshot={tourSnapshot} onSkip={skipTour} />
+        )}
       </div>
     </AppApiContext.Provider>
   );

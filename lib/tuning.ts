@@ -14,6 +14,13 @@ export const VIEW_GAP = 150;
 /** Full scene width: two figures plus the gap. */
 export const SCENE_W = BODY_W * 2 + VIEW_GAP;
 
+/** How far past the scene (and any off-body parts) the pan can still
+ *  wander — generous enough that fitAll's own framing and the drag-follow
+ *  camera's recentering pan never brush it, but the canvas is no longer
+ *  the endless void it used to be. One body height, scaled with the body
+ *  so it stays proportionate as the figures grow or shrink. */
+export const EXTENT_MARGIN = BODY_H;
+
 /** Magnet tuning, as fractions of current body height. */
 export const SNAP_FRAC = 0.045; // magnet capture radius around each anchor
 /** Sticky magnet: the held anchor keeps its grip until a rival anchor is

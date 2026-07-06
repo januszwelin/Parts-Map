@@ -37,19 +37,43 @@ function useListQuery(parts: Part[], open: boolean) {
   return { query, setQuery, shown };
 }
 
-/** The copy/export actions — one set of buttons shared by the desktop
- *  panel and the phone sheet (the caller provides the wrapping row). */
-function CopyActions({
+/** The copy/export actions, tucked behind a "⋯" menu — three text
+ *  buttons sitting bare in the panel/sheet used to read as loose,
+ *  unrelated chrome ("feels out of place"); one quiet trigger with a
+ *  panelStyle dropdown reads as a single, intentional feature. Shared by
+ *  the desktop panel and the phone sheet (the caller places it in its
+ *  own header). `onOpenChange` is a hook for the tour (coach-marks) to
+ *  notice the menu opening — optional, unused outside that. */
+function ExportMenu({
   parts,
   arrows,
   phone,
+  onOpenChange,
 }: {
   parts: Part[];
   arrows: Arrow[];
   phone?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<"list" | "rel" | "flow" | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
   const flash = (kind: "list" | "rel" | "flow") => {
     setCopied(kind);
     if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -72,38 +96,76 @@ function CopyActions({
     if (!(await downloadFlowchartPng(parts, arrows))) return;
     flash("flow");
   };
-  const actionBtn = phone
-    ? "rounded-lg px-2.5 py-2 text-xs hover:bg-black/5 disabled:opacity-40"
-    : "rounded-md px-2 py-1 text-[11px] hover:bg-black/5 pointer-coarse:py-2 disabled:opacity-40";
+
+  const rowCls = phone
+    ? "flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm hover:bg-black/5 disabled:opacity-40"
+    : "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-black/5 disabled:opacity-40";
+
   return (
-    <>
+    <div className="relative">
       <button
-        className={actionBtn}
+        data-tour="export-menu"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={
+          phone
+            ? "flex h-9 w-9 items-center justify-center rounded-full text-base hover:bg-black/5"
+            : "flex h-7 w-7 items-center justify-center rounded-md text-sm hover:bg-black/5 pointer-coarse:h-9 pointer-coarse:w-9"
+        }
         style={{ color: "var(--ink-soft)" }}
-        onClick={() => copy("list")}
-        disabled={!parts.length}
       >
-        {copied === "list" ? "copied ✓" : "copy list"}
+        ⋯
       </button>
-      <button
-        className={actionBtn}
-        style={{ color: "var(--ink-soft)" }}
-        onClick={() => copy("rel")}
-        disabled={!arrows.length}
-        title="Copy all arrows as a text flowchart"
-      >
-        {copied === "rel" ? "copied ✓" : "copy relationships"}
-      </button>
-      <button
-        className={actionBtn}
-        style={{ color: "var(--ink-soft)" }}
-        onClick={exportFlow}
-        disabled={!arrows.length}
-        title="Download all arrows as a flowchart image"
-      >
-        {copied === "flow" ? "exported ✓" : "export flowchart"}
-      </button>
-    </>
+      {open && (
+        <>
+          {/* Click-outside catcher — sits under the menu, above everything else. */}
+          <button
+            aria-hidden
+            tabIndex={-1}
+            className="fixed inset-0 z-10 cursor-default"
+            style={{ background: "transparent" }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="menu"
+            className="fade-in absolute right-0 top-full z-20 mt-1 w-48 rounded-xl p-1.5"
+            style={panelStyle}
+          >
+            <button
+              role="menuitem"
+              className={rowCls}
+              style={{ color: "var(--ink-soft)" }}
+              onClick={() => copy("list")}
+              disabled={!parts.length}
+            >
+              {copied === "list" ? "copied ✓" : "copy list"}
+            </button>
+            <button
+              role="menuitem"
+              className={rowCls}
+              style={{ color: "var(--ink-soft)" }}
+              onClick={() => copy("rel")}
+              disabled={!arrows.length}
+              title="Copy all arrows as a text flowchart"
+            >
+              {copied === "rel" ? "copied ✓" : "copy relationships"}
+            </button>
+            <button
+              role="menuitem"
+              className={rowCls}
+              style={{ color: "var(--ink-soft)" }}
+              onClick={exportFlow}
+              disabled={!arrows.length}
+              title="Download all arrows as a flowchart image"
+            >
+              {copied === "flow" ? "exported ✓" : "export flowchart"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -229,6 +291,7 @@ export function PartsListPanel({
   onSelect,
   onReveal,
   onClose,
+  onExportMenuOpenChange,
 }: {
   parts: Part[];
   arrows: Arrow[];
@@ -238,6 +301,8 @@ export function PartsListPanel({
   /** Glide the camera to the part (the row's "where is it?"). */
   onReveal: (id: string) => void;
   onClose: () => void;
+  /** The tour's hook into the "⋯" menu opening — optional. */
+  onExportMenuOpenChange?: (open: boolean) => void;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
   const reducedMotion = useReducedMotion();
@@ -268,20 +333,21 @@ export function PartsListPanel({
         <span className="text-xs font-medium" style={{ color: "var(--ink-soft)" }}>
           Parts ({parts.length})
         </span>
-        <button
-          aria-label="Close list"
-          className="rounded-md px-2 py-1 text-[11px] hover:bg-black/5 pointer-coarse:min-h-9 pointer-coarse:min-w-9"
-          style={{ color: "var(--ink-faint)" }}
-          onClick={onClose}
-        >
-          ◂
-        </button>
-      </div>
-      <div
-        className="flex flex-wrap items-center gap-1 px-2 py-1"
-        style={{ borderBottom: "1px solid var(--line)" }}
-      >
-        <CopyActions parts={parts} arrows={arrows} />
+        <div className="flex items-center gap-0.5">
+          <ExportMenu
+            parts={parts}
+            arrows={arrows}
+            onOpenChange={onExportMenuOpenChange}
+          />
+          <button
+            aria-label="Close list"
+            className="rounded-md px-2 py-1 text-[11px] hover:bg-black/5 pointer-coarse:min-h-9 pointer-coarse:min-w-9"
+            style={{ color: "var(--ink-faint)" }}
+            onClick={onClose}
+          >
+            ◂
+          </button>
+        </div>
       </div>
       {parts.length > 8 && (
         <div className="px-3 py-1.5" style={{ borderBottom: "1px solid var(--line)" }}>
@@ -336,12 +402,15 @@ export function PhonePartsSheet({
   open,
   onReveal,
   onClose,
+  onExportMenuOpenChange,
 }: {
   parts: Part[];
   arrows: Arrow[];
   open: boolean;
   onReveal: (id: string) => void;
   onClose: () => void;
+  /** The tour's hook into the "⋯" menu opening — optional. */
+  onExportMenuOpenChange?: (open: boolean) => void;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
   const sheetRef = useRef<HTMLDivElement>(null);
@@ -406,14 +475,22 @@ export function PhonePartsSheet({
         <span className="text-sm font-medium" style={{ color: "var(--ink-soft)" }}>
           Parts ({parts.length})
         </span>
-        <button
-          aria-label="Close list"
-          className="shrink-0 rounded-full px-3 py-2 text-xs"
-          style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
-          onClick={onClose}
-        >
-          Done
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <ExportMenu
+            parts={parts}
+            arrows={arrows}
+            phone
+            onOpenChange={onExportMenuOpenChange}
+          />
+          <button
+            aria-label="Close list"
+            className="shrink-0 rounded-full px-3 py-2 text-xs"
+            style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
+            onClick={onClose}
+          >
+            Done
+          </button>
+        </div>
       </div>
       {parts.length > 8 && (
         <div className="shrink-0 pb-2">
@@ -454,12 +531,6 @@ export function PhonePartsSheet({
             }}
           />
         ))}
-      </div>
-      <div
-        className="mt-1 flex shrink-0 flex-wrap items-center gap-1 pt-1.5"
-        style={{ borderTop: "1px solid var(--line)" }}
-      >
-        <CopyActions parts={parts} arrows={arrows} phone />
       </div>
     </div>
   );

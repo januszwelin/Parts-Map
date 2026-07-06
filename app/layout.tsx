@@ -15,6 +15,15 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Parts Map",
   description: "A spatial canvas for IFS parts work",
+  applicationName: "Parts Map",
+  // Icons themselves come from the app/icon.tsx and app/apple-icon.tsx
+  // metadata-file conventions (and app/manifest.ts for the PWA manifest)
+  // — Next injects those <link> tags on its own, nothing to list here.
+  appleWebApp: {
+    capable: true,
+    title: "Parts Map",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {
@@ -23,6 +32,7 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
+  themeColor: "#f7f5f1",
 };
 
 export default function RootLayout({

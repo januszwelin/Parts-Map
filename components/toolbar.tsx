@@ -8,6 +8,7 @@
 import { useRef, useState } from "react";
 import { MIN_SCALE, MAX_SCALE } from "@/lib/tuning";
 import { panelStyle } from "@/lib/ui";
+import { authClient } from "@/lib/auth-client";
 
 /** Tiny speaker glyph for the sound toggle — quiet wave when on, a
  *  soft × when off. Inline SVG, app convention. */
@@ -52,9 +53,21 @@ export function Toolbar(props: {
   onToggleList: () => void;
   soundOn: boolean;
   onToggleSound: () => void;
+  onShowWelcome: () => void;
+  onOpenMyMaps: () => void;
+  onSaveToCloud: () => void;
 }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [bodyOpen, setBodyOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { data: session } = authClient.useSession();
+  const deleteAccount = () => {
+    setConfirmDelete(false);
+    setAccountOpen(false);
+    setSheetOpen(false);
+    authClient.deleteUser().then(() => window.location.reload());
+  };
   const fileRef = useRef<HTMLInputElement>(null);
   const submit = () => {
     const n = props.nameValue.trim();
@@ -65,6 +78,8 @@ export function Toolbar(props: {
   const closePopovers = () => {
     setSheetOpen(false);
     setBodyOpen(false);
+    setAccountOpen(false);
+    setConfirmDelete(false);
   };
   const btn =
     "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-10";
@@ -106,11 +121,12 @@ export function Toolbar(props: {
         className="pointer-events-auto relative flex w-full max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-2xl px-2.5 py-2 sm:w-auto sm:px-3"
         style={{ ...panelStyle, touchAction: "manipulation" }}
       >
-        {(sheetOpen || bodyOpen) && (
+        {(sheetOpen || bodyOpen || accountOpen) && (
           <div className="fixed inset-0" onClick={closePopovers} />
         )}
 
         <button
+          data-tour="list"
           aria-label="Toggle parts list"
           className={`${btn} shrink-0`}
           style={{ color: "var(--ink-soft)" }}
@@ -134,6 +150,7 @@ export function Toolbar(props: {
           onKeyDown={(e) => e.key === "Enter" && submit()}
         />
         <button
+          data-tour="add"
           className="shrink-0 rounded-lg px-3 py-1.5 text-xs text-white transition-opacity hover:opacity-90"
           style={{ background: "var(--accent)" }}
           onClick={submit}
@@ -181,6 +198,111 @@ export function Toolbar(props: {
         >
           <SoundIcon on={props.soundOn} />
         </button>
+        <button
+          className={`${btn} hidden shrink-0 sm:block`}
+          style={{ color: "var(--ink-soft)" }}
+          aria-label="Welcome & tour"
+          title="Welcome & tour"
+          onClick={props.onShowWelcome}
+        >
+          ?
+        </button>
+        {session ? (
+          <div className="relative hidden shrink-0 sm:block">
+            <button
+              aria-label="Account"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium text-white"
+              style={{ background: "var(--accent)" }}
+              onClick={() => {
+                setSheetOpen(false);
+                setBodyOpen(false);
+                setAccountOpen((v) => !v);
+              }}
+            >
+              {(session.user.name || session.user.email || "?")
+                .trim()
+                .charAt(0)
+                .toUpperCase()}
+            </button>
+            {accountOpen && (
+              <div
+                className="fade-in absolute right-0 top-full z-20 mt-1 w-44 rounded-xl p-1.5"
+                style={panelStyle}
+              >
+                <button
+                  className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  onClick={() => {
+                    setAccountOpen(false);
+                    props.onOpenMyMaps();
+                  }}
+                >
+                  My maps
+                </button>
+                <button
+                  className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  onClick={() => {
+                    setAccountOpen(false);
+                    props.onSaveToCloud();
+                  }}
+                >
+                  Save to cloud
+                </button>
+                <button
+                  className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  onClick={() => {
+                    setAccountOpen(false);
+                    authClient.signOut();
+                  }}
+                >
+                  Sign out
+                </button>
+                <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+                {confirmDelete ? (
+                  <div className="px-2 py-1">
+                    <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      Delete your account and all cloud maps?
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                        onClick={deleteAccount}
+                      >
+                        Delete
+                      </button>
+                      <button
+                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        style={{ color: "var(--ink-soft)" }}
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                    style={{ color: "#A05B5B" }}
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    Delete account
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <a
+            href="/sign-in"
+            className={`${btn} hidden shrink-0 sm:block`}
+            style={{ color: "var(--ink-soft)" }}
+          >
+            Sign in
+          </a>
+        )}
 
         {/* ——— phone: body pill + overflow sheet ——— */}
         <button
@@ -216,7 +338,9 @@ export function Toolbar(props: {
         )}
         {sheetOpen && (
           <div
-            className="fade-in absolute bottom-full right-0 mb-2 flex w-36 flex-col rounded-2xl p-1.5 sm:hidden"
+            className={`fade-in absolute bottom-full right-0 mb-2 flex flex-col rounded-2xl p-1.5 sm:hidden ${
+              confirmDelete ? "w-56" : "w-36"
+            }`}
             style={{ ...panelStyle, touchAction: "manipulation" }}
           >
             <button
@@ -258,6 +382,91 @@ export function Toolbar(props: {
               <SoundIcon on={props.soundOn} />
               {props.soundOn ? "Sound on" : "Sound off"}
             </button>
+            <button
+              className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
+              style={{ color: "var(--ink-soft)" }}
+              onClick={() => {
+                setSheetOpen(false);
+                props.onShowWelcome();
+              }}
+            >
+              Welcome & tour
+            </button>
+            <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+            {session ? (
+              <>
+                <button
+                  className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  onClick={() => {
+                    setSheetOpen(false);
+                    props.onOpenMyMaps();
+                  }}
+                >
+                  My maps
+                </button>
+                <button
+                  className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  onClick={() => {
+                    setSheetOpen(false);
+                    props.onSaveToCloud();
+                  }}
+                >
+                  Save to cloud
+                </button>
+                <button
+                  className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
+                  style={{ color: "var(--ink-soft)" }}
+                  onClick={() => {
+                    setSheetOpen(false);
+                    authClient.signOut();
+                  }}
+                >
+                  Sign out
+                </button>
+                <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+                {confirmDelete ? (
+                  <div className="px-2 py-1.5">
+                    <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      Delete your account and all cloud maps?
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        className="flex-1 rounded-md px-2 py-1.5 text-[11px]"
+                        style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                        onClick={deleteAccount}
+                      >
+                        Delete
+                      </button>
+                      <button
+                        className="flex-1 rounded-md px-2 py-1.5 text-[11px]"
+                        style={{ color: "var(--ink-soft)" }}
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
+                    style={{ color: "#A05B5B" }}
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    Delete account
+                  </button>
+                )}
+              </>
+            ) : (
+              <a
+                href="/sign-in"
+                className="block rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
+                style={{ color: "var(--ink-soft)" }}
+              >
+                Sign in
+              </a>
+            )}
           </div>
         )}
 
@@ -284,6 +493,7 @@ export function FrameMapButton({ onFrame }: { onFrame: () => void }) {
   return (
     <button
       data-ui-chrome
+      data-tour="frame"
       aria-label="Frame the map"
       title="Frame the map"
       className="absolute bottom-[calc(76px+env(safe-area-inset-bottom))] right-3 z-20 flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:bottom-10"

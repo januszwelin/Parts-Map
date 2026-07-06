@@ -31,6 +31,11 @@ export type RegionDef = {
   /** Not a magnet target while dragging (diffuse + off-body zones);
    *  reachable via location text or import. */
   noSnap?: boolean;
+  /** The generic "free space" off-body zone: reserved for imports and
+   *  the location picker's own fallback, never offered by
+   *  `nearestOffZone` for a manual off-body drop (those keep their
+   *  directional label — "Behind me", "Above the head", …). */
+  freeZone?: boolean;
 };
 
 const R = (
@@ -235,6 +240,11 @@ export const REGIONS: RegionDef[] = [
     noSnap: true,
   }),
   R("off-below", "Below the feet", 0.5, 1.08, { offBody: true, noSnap: true }),
+  R("off-free", "Free space", 0.5, 0.62, {
+    offBody: true,
+    noSnap: true,
+    freeZone: true,
+  }),
 ];
 
 export const REGION_BY_KEY: Record<string, RegionDef> = Object.fromEntries(
@@ -346,4 +356,41 @@ export const SYNONYMS: Record<string, string> = {
   surrounding: "off-surround",
   "below me": "off-below",
   "under my feet": "off-below",
+  "free space": "off-free",
 };
+
+/** Coarse grouping for the phone location picker — a bottom sheet has no
+ *  room to scan ten micro-sections, so this collapses the comment blocks
+ *  above into a handful of scannable groups. Derived from each region's
+ *  key/flags rather than hand-tagged, so a newly added region only needs
+ *  to match one of these patterns (anything torso-shaped falls through
+ *  to "Torso" by default — the biggest, catch-all group). */
+const ARM_RE = /^(shoulder|upper-arm|elbow|forearm|wrist|hand|fingers)-(left|right)$/;
+const LEG_RE = /^(upper-thigh|thigh|knee|shin|ankle|foot)-(left|right)$/;
+const HEAD_RE =
+  /^(crown|forehead|upper-face|mid-face|lower-face|temple|behind-eyes|occiput)/;
+
+export type RegionSection = { name: string; regions: RegionDef[] };
+
+export const REGION_SECTIONS: RegionSection[] = (() => {
+  const named: Record<string, RegionDef[]> = {
+    "Head & face": [],
+    Torso: [],
+    Arms: [],
+    Legs: [],
+    "Whole body": [],
+    Elsewhere: [],
+  };
+  for (const r of REGIONS) {
+    if (r.offBody) named.Elsewhere.push(r);
+    else if (r.key === "whole-body" || r.key === "skin")
+      named["Whole body"].push(r);
+    else if (ARM_RE.test(r.key)) named.Arms.push(r);
+    else if (LEG_RE.test(r.key)) named.Legs.push(r);
+    else if (HEAD_RE.test(r.key)) named["Head & face"].push(r);
+    else named.Torso.push(r); // neck, chest, mid-torso, belly, pelvis & hips
+  }
+  return Object.entries(named)
+    .map(([name, regions]) => ({ name, regions }))
+    .filter((g) => g.regions.length > 0);
+})();

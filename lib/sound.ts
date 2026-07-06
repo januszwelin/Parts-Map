@@ -10,6 +10,7 @@
    interruptions). */
 
 import { TICK_MIN_MS } from "@/lib/tuning";
+import { haptic } from "@/lib/haptics";
 
 type SndState = {
   muted: boolean;
@@ -135,5 +136,5 @@ export function magnetTick(aim: { lastTickAt: number }, vib: number) {
   if (t - aim.lastTickAt < TICK_MIN_MS) return;
   aim.lastTickAt = t;
   sndPlay("tick");
-  navigator.vibrate?.(vib);
+  haptic(vib);
 }

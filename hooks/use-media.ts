@@ -32,3 +32,19 @@ export function useReducedMotion(): boolean {
   }, []);
   return reduced;
 }
+
+/** Reactive `(pointer: coarse)` — a touch/stylus primary pointer, no
+ *  hover. Used to widen tap targets (arrow hit area, connect dots) that
+ *  a mouse cursor doesn't need — a laptop with a touchscreen but a mouse
+ *  as its primary pointer correctly reads as fine, not coarse. */
+export function useIsCoarse(): boolean {
+  const [coarse, setCoarse] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(pointer: coarse)");
+    const update = () => setCoarse(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return coarse;
+}
