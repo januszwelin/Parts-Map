@@ -19,84 +19,23 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
-
-/* ——— password strength (sign-up only) ———
-   A quiet 3-segment bar, not a gate: minLength=8 stays the only hard
-   rule. Scored on length + character variety — no zxcvbn dependency;
-   this is a nudge toward better habits, not a security boundary. */
-function passwordStrength(pw: string): { score: 0 | 1 | 2 | 3; label: string } {
-  if (pw.length === 0) return { score: 0, label: "" };
-  if (pw.length < 8) return { score: 0, label: "Too short — 8 characters minimum" };
-  let points = 1; // ≥8 chars
-  if (pw.length >= 12) points++;
-  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) points++;
-  if (/\d/.test(pw)) points++;
-  if (/[^A-Za-z0-9]/.test(pw)) points++;
-  if (points <= 2) return { score: 1, label: "Weak — add length or variety" };
-  if (points <= 4) return { score: 2, label: "Good" };
-  return { score: 3, label: "Strong" };
-}
-
-const STRENGTH_COLORS = ["var(--line)", "#C08A8A", "#B5A97B", "#7D8B74"] as const;
-
-function StrengthBar({ password }: { password: string }) {
-  const { score, label } = passwordStrength(password);
-  if (!password) return null;
-  return (
-    <div aria-live="polite">
-      <div className="flex gap-1" role="img" aria-label={`Password strength: ${label}`}>
-        {[1, 2, 3].map((seg) => (
-          <div
-            key={seg}
-            className="h-1 flex-1 rounded-full transition-colors duration-300"
-            style={{
-              background: seg <= score ? STRENGTH_COLORS[score] : "var(--line)",
-            }}
-          />
-        ))}
-      </div>
-      <p
-        className="mt-1 text-[11px]"
-        style={{ color: score === 0 ? "#A05B5B" : "var(--ink-faint)" }}
-      >
-        {label}
-      </p>
-    </div>
-  );
-}
-
-/** Tiny inline spinner for buttons mid-flight. */
-function Spinner() {
-  return (
-    <svg
-      className="animate-spin"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden
-    >
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
-      <path
-        d="M22 12a10 10 0 0 0-10-10"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
+import { Spinner, StrengthBar } from "@/components/auth-ui";
 
 type Stage = "idle" | "submitting" | "redirecting";
 
 export default function SignInPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const [mode, setMode] = useState<"in" | "up" | "forgot">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage>("idle");
+  // Forgot-password always ends in this generic confirmation (BetterAuth
+  // itself never reveals whether the email had an account, to avoid
+  // enumeration) rather than a redirect.
+  const [resetSent, setResetSent] = useState(false);
   const busy = stage !== "idle";
 
   const submit = async (e: React.FormEvent) => {
@@ -104,6 +43,27 @@ export default function SignInPage() {
     if (busy) return;
     setError(null);
     setStage("submitting");
+
+    if (mode === "forgot") {
+      const { error: err } = await authClient.requestPasswordReset({
+        email,
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      setStage("idle");
+      if (err) {
+        setError(err.message ?? "Couldn't send a reset link — try again.");
+        return;
+      }
+      setResetSent(true);
+      return;
+    }
+
+    if (mode === "up" && !consent) {
+      setStage("idle");
+      setError("Please agree to how your maps are handled to continue.");
+      return;
+    }
+
     const { error: err } =
       mode === "in"
         ? await authClient.signIn.email({ email, password })
@@ -140,10 +100,14 @@ export default function SignInPage() {
       : stage === "submitting"
         ? mode === "in"
           ? "Signing in…"
-          : "Creating your account…"
+          : mode === "up"
+            ? "Creating your account…"
+            : "Sending reset link…"
         : mode === "in"
           ? "Sign in"
-          : "Create account";
+          : mode === "up"
+            ? "Create account"
+            : "Send reset link";
 
   return (
     <div
@@ -160,67 +124,126 @@ export default function SignInPage() {
         }}
       >
         <h1 className="text-base font-medium" style={{ color: "var(--ink)" }}>
-          {mode === "in" ? "Sign in" : "Create an account"}
+          {mode === "in"
+            ? "Sign in"
+            : mode === "up"
+              ? "Create an account"
+              : "Reset your password"}
         </h1>
         <p className="mt-1 text-[13px]" style={{ color: "var(--ink-soft)" }}>
-          Only needed for cloud-saved maps — the canvas itself works fine
-          without an account.
+          {mode === "forgot"
+            ? "We'll email you a link to set a new password."
+            : "Only needed for cloud-saved maps — the canvas itself works fine without an account."}
         </p>
 
-        <div className="mt-4 flex flex-col gap-2.5">
-          {mode === "up" && (
-            <input
-              className="rounded-lg px-3 py-2 text-sm outline-none disabled:opacity-60"
-              style={inputStyle}
-              placeholder="Name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoComplete="name"
-              disabled={busy}
-            />
-          )}
-          <input
-            className="rounded-lg px-3 py-2 text-sm outline-none disabled:opacity-60"
-            style={inputStyle}
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="email"
-            autoFocus
-            required
-            disabled={busy}
-          />
-          <input
-            className="rounded-lg px-3 py-2 text-sm outline-none disabled:opacity-60"
-            style={inputStyle}
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={mode === "in" ? "current-password" : "new-password"}
-            minLength={8}
-            required
-            disabled={busy}
-          />
-          {mode === "up" && <StrengthBar password={password} />}
-        </div>
-
-        {error && (
-          <p className="mt-3 text-[12px]" style={{ color: "#A05B5B" }} role="alert">
-            {error}
+        {mode === "forgot" && resetSent ? (
+          <p className="mt-4 text-[13px]" style={{ color: "var(--ink-soft)" }} role="status">
+            If that email has an account, check your inbox for a reset link.
           </p>
-        )}
+        ) : (
+          <>
+            <div className="mt-4 flex flex-col gap-2.5">
+              {mode === "up" && (
+                <input
+                  className="rounded-lg px-3 py-2 text-sm outline-none disabled:opacity-60"
+                  style={inputStyle}
+                  placeholder="Name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="name"
+                  disabled={busy}
+                />
+              )}
+              <input
+                className="rounded-lg px-3 py-2 text-sm outline-none disabled:opacity-60"
+                style={inputStyle}
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+                autoFocus
+                required
+                disabled={busy}
+              />
+              {mode !== "forgot" && (
+                <input
+                  className="rounded-lg px-3 py-2 text-sm outline-none disabled:opacity-60"
+                  style={inputStyle}
+                  type="password"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={mode === "in" ? "current-password" : "new-password"}
+                  minLength={8}
+                  required
+                  disabled={busy}
+                />
+              )}
+              {mode === "up" && <StrengthBar password={password} />}
+            </div>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-          style={{ background: "var(--accent)" }}
-        >
-          {busy && <Spinner />}
-          {buttonLabel}
-        </button>
+            {mode === "up" && (
+              <label
+                className="mt-3 flex cursor-pointer items-start gap-2 text-[12px] leading-relaxed"
+                style={{ color: "var(--ink-soft)" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(e) => setConsent(e.target.checked)}
+                  disabled={busy}
+                  className="mt-0.5 shrink-0 disabled:opacity-60"
+                  style={{ accentColor: "var(--accent)" }}
+                />
+                <span>
+                  I understand my saved maps are personal and I&apos;m okay with
+                  how they&apos;re handled — see the{" "}
+                  <Link
+                    href="/privacy"
+                    target="_blank"
+                    className="underline"
+                    style={{ color: "var(--ink)" }}
+                  >
+                    privacy note
+                  </Link>
+                  .
+                </span>
+              </label>
+            )}
+
+            {mode === "in" && (
+              <button
+                type="button"
+                disabled={busy}
+                className="mt-2 text-[12px] underline disabled:opacity-50"
+                style={{ color: "var(--ink-faint)" }}
+                onClick={() => {
+                  setError(null);
+                  setMode("forgot");
+                }}
+              >
+                Forgot password?
+              </button>
+            )}
+
+            {error && (
+              <p className="mt-3 text-[12px]" style={{ color: "var(--danger)" }} role="alert">
+                {error}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={busy}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+              style={{ background: "var(--accent)" }}
+            >
+              {busy && <Spinner />}
+              {buttonLabel}
+            </button>
+          </>
+        )}
 
         <button
           type="button"
@@ -229,10 +252,13 @@ export default function SignInPage() {
           style={{ color: "var(--ink-soft)" }}
           onClick={() => {
             setError(null);
+            setResetSent(false);
             setMode((m) => (m === "in" ? "up" : "in"));
           }}
         >
-          {mode === "in"
+          {mode === "forgot"
+            ? "Back to sign in"
+            : mode === "in"
             ? "Need an account? Create one"
             : "Already have an account? Sign in"}
         </button>

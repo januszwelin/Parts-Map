@@ -7,9 +7,12 @@
    Minimal on purpose: two sentences on what the app is, and a choice
    between diving in and taking the guided tour (components/coach-marks).
    No scrim-tap dismiss — this is a one-time decision, not a panel you
-   flick open and closed, so the two buttons are the only way out. */
+   flick open and closed, so the three buttons (+ Escape, same as every
+   other modal) are the only ways out. */
 
+import { useRef } from "react";
 import { panelStyle } from "@/lib/ui";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 export function WelcomeModal({
   open,
@@ -24,6 +27,8 @@ export function WelcomeModal({
    *  react to instead of a bare outline. */
   onExplore: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(open, panelRef);
   if (!open) return null;
   return (
     <div
@@ -32,10 +37,14 @@ export function WelcomeModal({
       style={{ background: "rgba(58,55,51,0.22)" }}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="welcome-modal-title"
         className="w-full max-w-sm rounded-2xl p-5 text-center"
         style={{ ...panelStyle, background: "#FDFCFA" }}
       >
-        <h2 className="text-base font-medium" style={{ color: "var(--ink)" }}>
+        <h2 id="welcome-modal-title" className="text-base font-medium" style={{ color: "var(--ink)" }}>
           Welcome to Parts Map
         </h2>
         <p

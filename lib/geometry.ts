@@ -11,8 +11,9 @@ import {
   SNAP_FRAC,
   EXTENT_MARGIN,
 } from "@/lib/tuning";
-import { REGIONS, type RegionDef } from "@/lib/regions";
-import type { Depth, Part } from "@/lib/types";
+import { REGIONS, REGION_BY_KEY, type RegionDef } from "@/lib/regions";
+import type { Depth, HandleSide, Part } from "@/lib/types";
+import { partSurface } from "@/lib/part-utils";
 
 /** Center x of a figure in flow space: the front figure sits on the
  *  viewer's left, the back figure on the viewer's right, VIEW_GAP apart. */
@@ -216,6 +217,44 @@ export function nearestOffZone(p: XYPosition, bodyScale: number): string {
   return bestKey;
 }
 
+/** One parts array → every part's flow-space center. The single source of
+ *  truth for "where does this part actually render" — the live canvas, the
+ *  drop-settle tween, and the map-image export (lib/exports.ts) all derive
+ *  from this so they can never disagree. A part renders on the figure of
+ *  the surface it sits on (its depth; back regions are always the back
+ *  figure). */
+export function derivePositions(
+  parts: Part[],
+  bodyScale: number,
+): Map<string, XYPosition> {
+  const out = new Map<string, XYPosition>();
+  const groupCount = new Map<string, number>();
+  for (const p of parts) {
+    const region = REGION_BY_KEY[p.location];
+    if (p.offBody || !region || region.offBody) {
+      out.set(p.id, p.freePos);
+      continue;
+    }
+    let pos = anchorToFlow(region, partSurface(p), bodyScale);
+    // Co-located parts (same region + depth) fan out in a small
+    // deterministic spiral — scaling alone can never separate parts
+    // that sit on the same point.
+    const gk = `${p.location}:${p.depth}`;
+    const n = groupCount.get(gk) ?? 0;
+    groupCount.set(gk, n + 1);
+    if (n > 0) {
+      const angle = n * 2.4;
+      const rad = 18 + 7 * n;
+      pos = {
+        x: pos.x + Math.cos(angle) * rad,
+        y: pos.y + Math.sin(angle) * rad,
+      };
+    }
+    out.set(p.id, pos);
+  }
+  return out;
+}
+
 export const easeOutBack = (t: number, s = 1.15) => {
   const c = s + 1;
   return 1 + c * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2);
@@ -239,4 +278,26 @@ export function rectEdgePoint(
   const sy = h / 2 / Math.abs(dy || 1e-6);
   const s = Math.min(sx, sy);
   return { x: center.x + dx * s, y: center.y + dy * s };
+}
+
+/** The point at the center of one named side of a rect — the fixed
+ *  counterpart to `rectEdgePoint`'s geometry-only calculation, used when an
+ *  arrow's exit side is known (the specific connect dot it was dragged
+ *  from) rather than derived from the direction to the other endpoint. */
+export function pointOnRectSide(
+  center: XYPosition,
+  w: number,
+  h: number,
+  side: HandleSide,
+): XYPosition {
+  switch (side) {
+    case "st":
+      return { x: center.x, y: center.y - h / 2 };
+    case "sr":
+      return { x: center.x + w / 2, y: center.y };
+    case "sb":
+      return { x: center.x, y: center.y + h / 2 };
+    case "sl":
+      return { x: center.x - w / 2, y: center.y };
+  }
 }

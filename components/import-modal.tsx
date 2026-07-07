@@ -4,8 +4,9 @@
    IMPORT MODAL — paste a list of parts, one per line
    ════════════════════════════════════════════════════════════════════ */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { panelStyle } from "@/lib/ui";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 export function ImportModal({
   open,
@@ -17,6 +18,8 @@ export function ImportModal({
   onImport: (text: string) => void;
 }) {
   const [text, setText] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(open, panelRef);
   if (!open) return null;
   return (
     <div
@@ -26,19 +29,28 @@ export function ImportModal({
       onClick={onClose}
     >
       <div
-        className="fade-in w-full max-w-md rounded-2xl p-4"
-        style={{ ...panelStyle, background: "#FDFCFA" }}
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="import-modal-title"
+        className="fade-in flex w-full max-w-md flex-col rounded-2xl p-4"
+        style={{ ...panelStyle, background: "#FDFCFA", maxHeight: "90dvh" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-sm font-medium">Import parts</h2>
-        <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+        <h2 id="import-modal-title" className="shrink-0 text-sm font-medium">
+          Import parts
+        </h2>
+        <p
+          className="mt-1 shrink-0 text-[11px] leading-relaxed"
+          style={{ color: "var(--ink-soft)" }}
+        >
           One part per line. Optionally add a location after a comma or tab —
           e.g. <span className="font-mono">Protector, solar plexus</span>.
           Anything unmatched lands in free space below the figure, ready to
           place.
         </p>
         <textarea
-          className="mt-3 w-full resize-none rounded-xl p-3 text-sm outline-none"
+          className="mt-3 min-h-0 flex-1 resize-none rounded-xl p-3 text-sm outline-none"
           style={{ background: "rgba(255,255,255,0.8)", border: "1px solid var(--line)" }}
           rows={6}
           autoFocus
@@ -46,7 +58,7 @@ export function ImportModal({
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
-        <div className="mt-3 flex justify-end gap-2">
+        <div className="mt-3 flex shrink-0 justify-end gap-2">
           <button
             className="rounded-lg px-3 py-1.5 text-xs hover:bg-black/5"
             style={{ color: "var(--ink-soft)" }}

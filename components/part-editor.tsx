@@ -6,12 +6,12 @@
    ════════════════════════════════════════════════════════════════════ */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { PALETTE } from "@/lib/tuning";
+import { PALETTE, PALETTE_NAMES } from "@/lib/tuning";
 import { REGION_BY_KEY } from "@/lib/regions";
 import type { Part } from "@/lib/types";
-import { locationDisplay, partSurface } from "@/lib/part-utils";
+import { locationDisplay, partSurface, FONT_SIZE_LABELS } from "@/lib/part-utils";
 import { panelStyle } from "@/lib/ui";
-import { useAppApi } from "@/hooks/use-app-api";
+import { useAppApi, usePartsList } from "@/hooks/use-app-api";
 import { LocationPicker } from "@/components/location-picker";
 
 /** A draft field (name/note/location) registers its own commit callback
@@ -198,9 +198,55 @@ export function LocationField({
   );
 }
 
+/** Pointer-free arrow creation: a native <select> of the other parts.
+ *  Choosing one draws an arrow from this part to it — the keyboard/touch
+ *  counterpart to dragging a connect dot (dragging is the only other way
+ *  to make a relationship, and it's unreachable without a pointer). A
+ *  native select gets full keyboard operation and the OS picker on phones
+ *  for free. Controlled to "" so it always springs back to the prompt
+ *  after a pick. Hidden when there's no other part to link to yet. */
+function ConnectField({ part, sheet }: { part: Part; sheet?: boolean }) {
+  const api = useAppApi();
+  const parts = usePartsList();
+  const others = parts.filter((o) => o.id !== part.id);
+  if (others.length === 0) return null;
+  return (
+    <select
+      aria-label={`Draw an arrow from ${part.name} to another part`}
+      className={`nodrag nopan w-full rounded-md outline-none ${
+        sheet ? "min-h-10 px-3 text-sm" : "px-2 py-1 text-xs"
+      }`}
+      style={{
+        background: "rgba(255,255,255,0.7)",
+        border: "1px solid var(--line)",
+        color: "var(--ink-soft)",
+      }}
+      value=""
+      onChange={(e) => {
+        if (e.target.value) api.connectParts(part.id, e.target.value);
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <option value="" disabled>
+        Draw arrow to…
+      </option>
+      {others.map((o) => (
+        <option key={o.id} value={o.id}>
+          → {o.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** Lean Miro-style card editor: color, size, bold, shape, location, delete. */
 export function EditPopover({ part }: { part: Part }) {
   const api = useAppApi();
+  // A mis-tap delete used to be permanent (no confirmation, and until
+  // recently no visible Undo either) — one extra tap before it actually
+  // happens, mirroring the confirm pattern already used in my-maps.tsx.
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const chip = (active: boolean): React.CSSProperties => ({
     border: "1px solid var(--line)",
     background: active ? "var(--ink)" : "rgba(255,255,255,0.7)",
@@ -218,7 +264,8 @@ export function EditPopover({ part }: { part: Part }) {
         {PALETTE.map((c) => (
           <button
             key={c}
-            aria-label={`Color ${c}`}
+            aria-label={`Color: ${PALETTE_NAMES[c] ?? c}`}
+            aria-pressed={part.color === c}
             onClick={() => api.updatePart(part.id, { color: c })}
             className="flex h-8 w-8 items-center justify-center rounded-full"
           >
@@ -239,6 +286,8 @@ export function EditPopover({ part }: { part: Part }) {
         {(["s", "m", "l"] as const).map((s) => (
           <button
             key={s}
+            aria-label={`Text size: ${FONT_SIZE_LABELS[s]}`}
+            aria-pressed={part.fontSize === s}
             onClick={() => api.updatePart(part.id, { fontSize: s })}
             className="min-h-8 rounded-md px-2 py-1"
             style={{
@@ -250,6 +299,8 @@ export function EditPopover({ part }: { part: Part }) {
           </button>
         ))}
         <button
+          aria-label="Bold"
+          aria-pressed={part.bold}
           onClick={() => api.updatePart(part.id, { bold: !part.bold })}
           className="min-h-8 rounded-md px-2.5 py-1 text-xs font-bold"
           style={chip(part.bold)}
@@ -267,7 +318,8 @@ export function EditPopover({ part }: { part: Part }) {
         ).map(([shape, glyph]) => (
           <button
             key={shape}
-            aria-label={`Shape ${shape}`}
+            aria-label={`Shape: ${shape}`}
+            aria-pressed={part.shape === shape}
             onClick={() => api.updatePart(part.id, { shape })}
             className="min-h-8 rounded-md px-2 py-1 text-xs"
             style={chip(part.shape === shape)}
@@ -279,16 +331,45 @@ export function EditPopover({ part }: { part: Part }) {
       <div className="w-full">
         <NoteField part={part} />
       </div>
+      <div className="w-full">
+        <ConnectField part={part} />
+      </div>
       <div className="flex w-full items-center gap-2">
-        <LocationField part={part} />
-        <button
-          aria-label="Delete part"
-          onClick={() => api.deletePart(part.id)}
-          className="ml-auto min-h-8 rounded-md px-2.5 py-1 text-xs"
-          style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
-        >
-          delete
-        </button>
+        {confirmDelete ? (
+          <div className="ml-auto flex items-center gap-1.5">
+            <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              Delete “{part.name}”?
+            </span>
+            <button
+              aria-label={`Confirm delete “${part.name}”`}
+              onClick={() => api.deletePart(part.id)}
+              className="min-h-8 rounded-md px-2.5 py-1 text-xs"
+              style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
+            >
+              delete
+            </button>
+            <button
+              aria-label="Cancel delete"
+              onClick={() => setConfirmDelete(false)}
+              className="min-h-8 rounded-md px-2.5 py-1 text-xs"
+              style={{ color: "var(--ink-soft)" }}
+            >
+              cancel
+            </button>
+          </div>
+        ) : (
+          <>
+            <LocationField part={part} />
+            <button
+              aria-label="Delete part"
+              onClick={() => setConfirmDelete(true)}
+              className="ml-auto min-h-8 rounded-md px-2.5 py-1 text-xs"
+              style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
+            >
+              delete
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -316,6 +397,10 @@ export function MobileEditSheet({
   const sheetRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ y0: number; dy: number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Which part id (if any) has a pending delete confirmation — comparing
+  // against the current part rather than a plain boolean means switching
+  // parts (the sheet stays mounted) can't carry a stale confirm state over.
+  const [confirmDeleteFor, setConfirmDeleteFor] = useState<string | null>(null);
 
   // The registry every draft field below registers into (see
   // CommitRegistryContext) — a stable Map for the sheet's lifetime. A
@@ -335,11 +420,13 @@ export function MobileEditSheet({
     if (wasOpenRef.current && !open) {
       flushPending();
       setPickerOpen(false);
+      setConfirmDeleteFor(null);
     }
     wasOpenRef.current = open;
   }, [open, flushPending]);
 
   if (!p) return null;
+  const confirmingDelete = confirmDeleteFor === p.id;
 
   const region = REGION_BY_KEY[p.location];
   const surface = partSurface(p);
@@ -441,7 +528,8 @@ export function MobileEditSheet({
               {PALETTE.map((c) => (
                 <button
                   key={c}
-                  aria-label={`Color ${c}`}
+                  aria-label={`Color: ${PALETTE_NAMES[c] ?? c}`}
+                  aria-pressed={p.color === c}
                   onClick={() => api.updatePart(p.id, { color: c })}
                   className="flex h-10 w-10 items-center justify-center rounded-full"
                 >
@@ -462,7 +550,8 @@ export function MobileEditSheet({
               {(["s", "m", "l"] as const).map((s) => (
                 <button
                   key={s}
-                  aria-label={`Text size ${s}`}
+                  aria-label={`Text size: ${FONT_SIZE_LABELS[s]}`}
+                  aria-pressed={p.fontSize === s}
                   onClick={() => api.updatePart(p.id, { fontSize: s })}
                   className="min-h-10 flex-1 rounded-lg"
                   style={{
@@ -475,6 +564,7 @@ export function MobileEditSheet({
               ))}
               <button
                 aria-label="Bold"
+                aria-pressed={p.bold}
                 onClick={() => api.updatePart(p.id, { bold: !p.bold })}
                 className="min-h-10 flex-1 rounded-lg text-sm font-bold"
                 style={chip(p.bold)}
@@ -495,7 +585,8 @@ export function MobileEditSheet({
               ).map(([shape, glyph]) => (
                 <button
                   key={shape}
-                  aria-label={`Shape ${shape}`}
+                  aria-pressed={p.shape === shape}
+                  aria-label={`Shape: ${shape}`}
                   onClick={() => api.updatePart(p.id, { shape })}
                   className="min-h-10 flex-1 rounded-lg text-sm"
                   style={chip(p.shape === shape)}
@@ -504,57 +595,84 @@ export function MobileEditSheet({
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                aria-label="Edit location"
-                onClick={() => setPickerOpen(true)}
-                className="flex min-h-10 flex-1 items-center justify-between rounded-lg px-3 text-left text-sm"
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  border: "1px solid var(--line)",
-                  color: "var(--ink-soft)",
-                }}
-              >
-                <span className="truncate">{locationDisplay(p)}</span>
-                <span aria-hidden style={{ color: "var(--ink-faint)" }}>
-                  ›
+            {confirmingDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 text-[13px]" style={{ color: "var(--ink-soft)" }}>
+                  Delete “{p.name}”?
                 </span>
-              </button>
-              {canFlip && (
-                <div
-                  className="flex shrink-0 overflow-hidden rounded-lg"
-                  style={{ border: "1px solid var(--line)" }}
-                  role="group"
-                  aria-label="Body surface"
+                <button
+                  aria-label={`Confirm delete “${p.name}”`}
+                  onClick={() => {
+                    api.deletePart(p.id);
+                    onClose();
+                  }}
+                  className="min-h-10 shrink-0 rounded-lg px-3.5 text-xs"
+                  style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                 >
-                  {(["front", "back"] as const).map((d) => (
-                    <button
-                      key={d}
-                      aria-pressed={surface === d}
-                      className="min-h-10 px-3 text-[11px] uppercase tracking-wide"
-                      style={{
-                        background:
-                          surface === d ? "var(--ink)" : "rgba(255,255,255,0.7)",
-                        color: surface === d ? "#fff" : "var(--ink-soft)",
-                      }}
-                      onClick={() => surface !== d && api.setDepth(p.id, d)}
-                    >
-                      {d}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button
-                aria-label="Delete part"
-                onClick={() => {
-                  api.deletePart(p.id);
-                  onClose();
-                }}
-                className="ml-auto min-h-10 shrink-0 rounded-lg px-3.5 text-xs"
-                style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
-              >
-                delete
-              </button>
+                  delete
+                </button>
+                <button
+                  aria-label="Cancel delete"
+                  onClick={() => setConfirmDeleteFor(null)}
+                  className="min-h-10 shrink-0 rounded-lg px-3.5 text-xs"
+                  style={{ color: "var(--ink-soft)" }}
+                >
+                  cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  aria-label="Edit location"
+                  onClick={() => setPickerOpen(true)}
+                  className="flex min-h-10 flex-1 items-center justify-between rounded-lg px-3 text-left text-sm"
+                  style={{
+                    background: "rgba(255,255,255,0.7)",
+                    border: "1px solid var(--line)",
+                    color: "var(--ink-soft)",
+                  }}
+                >
+                  <span className="truncate">{locationDisplay(p)}</span>
+                  <span aria-hidden style={{ color: "var(--ink-faint)" }}>
+                    ›
+                  </span>
+                </button>
+                {canFlip && (
+                  <div
+                    className="flex shrink-0 overflow-hidden rounded-lg"
+                    style={{ border: "1px solid var(--line)" }}
+                    role="group"
+                    aria-label="Body surface"
+                  >
+                    {(["front", "back"] as const).map((d) => (
+                      <button
+                        key={d}
+                        aria-pressed={surface === d}
+                        className="min-h-10 px-3 text-[11px] uppercase tracking-wide"
+                        style={{
+                          background:
+                            surface === d ? "var(--ink)" : "rgba(255,255,255,0.7)",
+                          color: surface === d ? "#fff" : "var(--ink-soft)",
+                        }}
+                        onClick={() => surface !== d && api.setDepth(p.id, d)}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  aria-label="Delete part"
+                  onClick={() => setConfirmDeleteFor(p.id)}
+                  className="ml-auto min-h-10 shrink-0 rounded-lg px-3.5 text-xs"
+                  style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
+                >
+                  delete
+                </button>
+              </div>
+            )}
+            <div className="pt-2.5">
+              <ConnectField part={p} sheet />
             </div>
             <div className="pt-2.5">
               <NoteField part={p} sheet />

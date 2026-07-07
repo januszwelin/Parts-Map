@@ -5,7 +5,7 @@
    current map as a new cloud copy
    ════════════════════════════════════════════════════════════════════ */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MapDoc } from "@/lib/types";
 import {
   listMaps,
@@ -17,10 +17,22 @@ import {
   type MapSummary,
 } from "@/lib/cloud";
 import { panelStyle } from "@/lib/ui";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 function formatDate(iso: string) {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** A quiet "3 parts · edited Jul 6" line for a map row — gives a sense of
+ *  a map's size and recency before opening it. The count is omitted when
+ *  the summary doesn't carry it (e.g. straight off a create/rename, before
+ *  the list re-fetch fills it in). */
+function rowMeta(row: MapSummary) {
+  const date = `edited ${formatDate(row.updatedAt)}`;
+  if (row.partCount == null) return date;
+  const parts = `${row.partCount} part${row.partCount === 1 ? "" : "s"}`;
+  return `${parts} · ${date}`;
 }
 
 export function MyMapsModal({
@@ -46,6 +58,8 @@ export function MyMapsModal({
   const [confirmOpen, setConfirmOpen] = useState<MapSummary | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(open, panelRef);
 
   useEffect(() => {
     const openFresh = () => {
@@ -137,12 +151,16 @@ export function MyMapsModal({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="my-maps-title"
         className="fade-in flex w-full max-w-md flex-col rounded-2xl p-4"
-        style={{ ...panelStyle, background: "#FDFCFA", maxHeight: "80vh" }}
+        style={{ ...panelStyle, background: "#FDFCFA", maxHeight: "80dvh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between pb-2">
-          <h2 className="text-sm font-medium" style={{ color: "var(--ink)" }}>
+          <h2 id="my-maps-title" className="text-sm font-medium" style={{ color: "var(--ink)" }}>
             My maps
           </h2>
           <button
@@ -179,7 +197,7 @@ export function MyMapsModal({
         </div>
 
         {error && (
-          <p className="pb-2 text-[12px]" style={{ color: "#A05B5B" }}>
+          <p className="pb-2 text-[12px]" style={{ color: "var(--danger)" }}>
             {error}
           </p>
         )}
@@ -204,7 +222,7 @@ export function MyMapsModal({
                   </span>
                   <button
                     className="rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
-                    style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                    style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                     disabled={busyId === row.id}
                     onClick={() => doOpen(row)}
                   >
@@ -225,7 +243,7 @@ export function MyMapsModal({
                   </span>
                   <button
                     className="rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
-                    style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                    style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                     disabled={busyId === row.id}
                     onClick={() => doDelete(row.id)}
                   >
@@ -269,7 +287,7 @@ export function MyMapsModal({
                       </button>
                     )}
                     <span className="text-[11px]" style={{ color: "var(--ink-faint)" }}>
-                      {formatDate(row.updatedAt)}
+                      {rowMeta(row)}
                     </span>
                   </div>
                   <button
@@ -283,7 +301,7 @@ export function MyMapsModal({
                   <button
                     aria-label="Delete map"
                     className="shrink-0 rounded-md px-2.5 py-1 text-[11px] disabled:opacity-60"
-                    style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                    style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                     disabled={busyId !== null}
                     onClick={() => setConfirmDeleteId(row.id)}
                   >

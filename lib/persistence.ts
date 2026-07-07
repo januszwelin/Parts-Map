@@ -11,7 +11,13 @@ import {
 } from "@/lib/tuning";
 import { REGION_BY_KEY } from "@/lib/regions";
 import type { XYPosition } from "@xyflow/react";
-import { newId, type Part, type Arrow, type MapDoc } from "@/lib/types";
+import {
+  newId,
+  type Part,
+  type Arrow,
+  type MapDoc,
+  type HandleSide,
+} from "@/lib/types";
 
 function serializeMap(doc: MapDoc): string {
   return JSON.stringify(doc, null, 2);
@@ -93,6 +99,11 @@ export function parseMapJson(json: string): MapDoc {
     };
   });
   const ids = new Set(parts.map((p) => p.id));
+  const HANDLE_SIDES = new Set(["st", "sr", "sb", "sl"]);
+  const safeHandle = (v: unknown): HandleSide | undefined =>
+    typeof v === "string" && HANDLE_SIDES.has(v)
+      ? (v as HandleSide)
+      : undefined;
   const arrows: Arrow[] = raw.arrows
     .filter(
       (a) =>
@@ -112,6 +123,7 @@ export function parseMapJson(json: string): MapDoc {
         typeof a.label === "string" && a.label.trim()
           ? a.label.trim().slice(0, 40)
           : undefined,
+      sourceHandle: safeHandle(a.sourceHandle),
     }));
   return {
     version: 1,

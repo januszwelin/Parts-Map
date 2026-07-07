@@ -13,6 +13,7 @@ import {
   copyText,
   relationshipsText,
   downloadFlowchartPng,
+  downloadMapPng,
 } from "@/lib/exports";
 import { useReducedMotion } from "@/hooks/use-media";
 import { LocationField } from "@/components/part-editor";
@@ -47,16 +48,26 @@ function useListQuery(parts: Part[], open: boolean) {
 function ExportMenu({
   parts,
   arrows,
+  bodyScale,
   phone,
   onOpenChange,
+  onNotice,
 }: {
   parts: Part[];
   arrows: Arrow[];
+  bodyScale: number;
   phone?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Failures used to be silent — the button just did nothing, which reads
+   *  as broken rather than as "that didn't work." Mobile in-app browsers
+   *  (Instagram/Slack webviews, etc.) are exactly where the clipboard
+   *  fallback is most likely to actually fail. */
+  onNotice?: (text: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<"list" | "rel" | "flow" | null>(null);
+  const [copied, setCopied] = useState<"list" | "rel" | "flow" | "map" | null>(
+    null,
+  );
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onOpenChangeRef = useRef(onOpenChange);
   useEffect(() => {
@@ -74,7 +85,7 @@ function ExportMenu({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const flash = (kind: "list" | "rel" | "flow") => {
+  const flash = (kind: "list" | "rel" | "flow" | "map") => {
     setCopied(kind);
     if (copyTimer.current) clearTimeout(copyTimer.current);
     copyTimer.current = setTimeout(() => setCopied(null), 1400);
@@ -89,12 +100,25 @@ function ExportMenu({
             )
             .join("\n")
         : relationshipsText(parts, arrows);
-    if (!(await copyText(text))) return;
+    if (!(await copyText(text))) {
+      onNotice?.("Couldn't copy — your browser may be blocking clipboard access.");
+      return;
+    }
     flash(kind);
   };
   const exportFlow = async () => {
-    if (!(await downloadFlowchartPng(parts, arrows))) return;
+    if (!(await downloadFlowchartPng(parts, arrows))) {
+      onNotice?.("Couldn't export the flowchart image.");
+      return;
+    }
     flash("flow");
+  };
+  const exportMap = async () => {
+    if (!(await downloadMapPng(parts, arrows, bodyScale))) {
+      onNotice?.("Couldn't export the map image.");
+      return;
+    }
+    flash("map");
   };
 
   const rowCls = phone
@@ -161,6 +185,16 @@ function ExportMenu({
               title="Download all arrows as a flowchart image"
             >
               {copied === "flow" ? "exported ✓" : "export flowchart"}
+            </button>
+            <button
+              role="menuitem"
+              className={rowCls}
+              style={{ color: "var(--ink-soft)" }}
+              onClick={exportMap}
+              disabled={!parts.length}
+              title="Download the body map, with every part in its real position"
+            >
+              {copied === "map" ? "exported ✓" : "export map image"}
             </button>
           </div>
         </>
@@ -286,15 +320,18 @@ function PartRow({
 export function PartsListPanel({
   parts,
   arrows,
+  bodyScale,
   open,
   selectedId,
   onSelect,
   onReveal,
   onClose,
   onExportMenuOpenChange,
+  onNotice,
 }: {
   parts: Part[];
   arrows: Arrow[];
+  bodyScale: number;
   open: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -303,6 +340,7 @@ export function PartsListPanel({
   onClose: () => void;
   /** The tour's hook into the "⋯" menu opening — optional. */
   onExportMenuOpenChange?: (open: boolean) => void;
+  onNotice?: (text: string) => void;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
   const reducedMotion = useReducedMotion();
@@ -337,7 +375,9 @@ export function PartsListPanel({
           <ExportMenu
             parts={parts}
             arrows={arrows}
+            bodyScale={bodyScale}
             onOpenChange={onExportMenuOpenChange}
+            onNotice={onNotice}
           />
           <button
             aria-label="Close list"
@@ -399,18 +439,22 @@ export function PartsListPanel({
 export function PhonePartsSheet({
   parts,
   arrows,
+  bodyScale,
   open,
   onReveal,
   onClose,
   onExportMenuOpenChange,
+  onNotice,
 }: {
   parts: Part[];
   arrows: Arrow[];
+  bodyScale: number;
   open: boolean;
   onReveal: (id: string) => void;
   onClose: () => void;
   /** The tour's hook into the "⋯" menu opening — optional. */
   onExportMenuOpenChange?: (open: boolean) => void;
+  onNotice?: (text: string) => void;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
   const sheetRef = useRef<HTMLDivElement>(null);
@@ -479,8 +523,10 @@ export function PhonePartsSheet({
           <ExportMenu
             parts={parts}
             arrows={arrows}
+            bodyScale={bodyScale}
             phone
             onOpenChange={onExportMenuOpenChange}
+            onNotice={onNotice}
           />
           <button
             aria-label="Close list"

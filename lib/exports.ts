@@ -3,6 +3,11 @@
    ════════════════════════════════════════════════════════════════════ */
 
 import type { Arrow, Part } from "@/lib/types";
+import type { XYPosition } from "@xyflow/react";
+import { BODY_H, BODY_W } from "@/lib/tuning";
+import { figureCenterX, derivePositions, rectEdgePoint } from "@/lib/geometry";
+import { BODY_PATHS, BODY_BACK_DETAIL } from "@/lib/body-paths";
+import { FONT_PX, SHAPE_RADIUS, partIsBack } from "@/lib/part-utils";
 
 /** Clipboard write with a legacy fallback (non-secure contexts, denied
  *  permission). Resolves true only when the text actually copied — the
@@ -299,17 +304,18 @@ function flowchartSvg(
   return { svg, w, h };
 }
 
-/** Rasterize the flowchart SVG at 2× and download it as a PNG. Resolves
- *  true only when the file was actually handed to the browser — the
- *  "exported ✓" feedback must never lie. */
-export async function downloadFlowchartPng(
-  parts: Part[],
-  arrows: Arrow[],
+/** Rasterize an SVG string at 2× and download it as a PNG. Resolves true
+ *  only when the file was actually handed to the browser — the "exported
+ *  ✓" feedback must never lie. Shared by the flowchart export and the
+ *  spatial map-image export below. */
+async function rasterizeSvgToPng(
+  svg: string,
+  w: number,
+  h: number,
+  filename: string,
 ): Promise<boolean> {
-  const built = flowchartSvg(parts, arrows);
-  if (!built) return false;
   const url = URL.createObjectURL(
-    new Blob([built.svg], { type: "image/svg+xml;charset=utf-8" }),
+    new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
   );
   try {
     const img = new Image();
@@ -319,8 +325,8 @@ export async function downloadFlowchartPng(
       img.src = url;
     });
     const canvas = document.createElement("canvas");
-    canvas.width = built.w * 2;
-    canvas.height = built.h * 2;
+    canvas.width = w * 2;
+    canvas.height = h * 2;
     const c = canvas.getContext("2d");
     if (!c) return false;
     c.scale(2, 2);
@@ -332,7 +338,7 @@ export async function downloadFlowchartPng(
     const dl = URL.createObjectURL(png);
     const a = document.createElement("a");
     a.href = dl;
-    a.download = "parts-map-flowchart.png";
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(dl);
     return true;
@@ -341,4 +347,207 @@ export async function downloadFlowchartPng(
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Rasterize the flowchart SVG at 2× and download it as a PNG. Resolves
+ *  true only when the file was actually handed to the browser — the
+ *  "exported ✓" feedback must never lie. */
+export async function downloadFlowchartPng(
+  parts: Part[],
+  arrows: Arrow[],
+): Promise<boolean> {
+  const built = flowchartSvg(parts, arrows);
+  if (!built) return false;
+  return rasterizeSvgToPng(built.svg, built.w, built.h, "parts-map-flowchart.png");
+}
+
+/* ——— Spatial map-image export ———
+   Unlike the flowchart above (an abstract top-down relationship diagram),
+   this draws what the person actually built: parts on the body silhouette,
+   front and back, in their real positions — the same geometry the live
+   canvas uses (derivePositions, figureCenterX, the traced body paths),
+   redrawn as a flat SVG so it can be rasterized outside the page. Colors
+   are literals for the same reason as the flowchart export. */
+
+const MAP_MARGIN = 48;
+const MAP_CARD_H = 44;
+const MAP_CARD_MIN_W = 92;
+const MAP_CARD_MAX_W = 200;
+const MAP_CARD_PAD_X = 16;
+const MAP_GAP = 6; // matches ARROW_GAP in floating-edge.tsx
+
+type MapCard = { part: Part; label: string; pos: XYPosition; w: number; h: number };
+
+function mapSvg(
+  parts: Part[],
+  arrows: Arrow[],
+  bodyScale: number,
+): { svg: string; w: number; h: number } | null {
+  if (!parts.length) return null;
+  const ctx = document.createElement("canvas").getContext("2d");
+  const measure = (text: string, px: number) => {
+    if (!ctx) return text.length * px * 0.55;
+    ctx.font = `${px}px ${FLOW_FONT_STACK}`;
+    return ctx.measureText(text).width;
+  };
+
+  const posMap = derivePositions(parts, bodyScale);
+  const cards: MapCard[] = parts.map((p) => {
+    const pos = posMap.get(p.id) ?? { x: 0, y: 0 };
+    const px = FONT_PX[p.fontSize];
+    let label = p.name;
+    let w = p.w ?? Math.max(MAP_CARD_MIN_W, measure(label, px) + MAP_CARD_PAD_X * 2);
+    if (!p.w) {
+      w = Math.min(MAP_CARD_MAX_W, w);
+      while (w === MAP_CARD_MAX_W && measure(label, px) + MAP_CARD_PAD_X * 2 > w && label.length > 2) {
+        label = label.slice(0, -2).trimEnd() + "…";
+      }
+    }
+    const h = p.h ?? MAP_CARD_H;
+    return { part: p, label, pos, w, h };
+  });
+  const cardById = new Map(cards.map((c) => [c.part.id, c]));
+
+  // Bounds: both figure boxes (always — the body is context even for an
+  // all-off-body map) plus every card's full extent.
+  const half = (BODY_H * bodyScale) / 2;
+  const figHalfW = (BODY_W * bodyScale) / 2;
+  let minX = Math.min(
+    figureCenterX("front", bodyScale) - figHalfW,
+    figureCenterX("back", bodyScale) - figHalfW,
+  );
+  let maxX = Math.max(
+    figureCenterX("front", bodyScale) + figHalfW,
+    figureCenterX("back", bodyScale) + figHalfW,
+  );
+  let minY = -half;
+  let maxY = half;
+  for (const c of cards) {
+    minX = Math.min(minX, c.pos.x - c.w / 2);
+    maxX = Math.max(maxX, c.pos.x + c.w / 2);
+    minY = Math.min(minY, c.pos.y - c.h / 2);
+    maxY = Math.max(maxY, c.pos.y + c.h / 2);
+  }
+  const captionH = 24;
+  minX -= MAP_MARGIN;
+  maxX += MAP_MARGIN;
+  minY -= MAP_MARGIN;
+  maxY += MAP_MARGIN + captionH;
+  const w = Math.ceil(maxX - minX);
+  const h = Math.ceil(maxY - minY);
+  const ox = -minX;
+  const oy = -minY;
+
+  const bodyStroke = 'fill="none" stroke="#3a3733" stroke-opacity="0.35" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
+  const figureSvg = (depth: "front" | "back") => {
+    const cx = figureCenterX(depth, bodyScale) + ox;
+    const cy = oy;
+    const s = bodyScale;
+    const paths = BODY_PATHS.map((d) => `<path d="${d}" ${bodyStroke}/>`).join("");
+    const backDetail =
+      depth === "back"
+        ? `<g opacity="0.8">${BODY_BACK_DETAIL.map((d) => `<path d="${d}" ${bodyStroke}/>`).join("")}</g>`
+        : "";
+    // Same transform stack as the live BodyOutline: translate to the
+    // figure's center, scale by bodyScale, offset so raw path coords
+    // (0..460, 0..1000) center on that point, mirroring for the back.
+    const inner = depth === "back"
+      ? `<g transform="translate(460,0) scale(-1,1)">${paths}${backDetail}</g>`
+      : `${paths}${backDetail}`;
+    const caption = depth.toUpperCase();
+    return (
+      `<g transform="translate(${cx} ${cy}) scale(${s})">` +
+      `<g transform="translate(-230,-500)">${inner}</g>` +
+      `</g>` +
+      `<text x="${cx}" y="${cy + half + 20}" text-anchor="middle" font-family="${FLOW_FONT_STACK}" font-size="12" letter-spacing="2" fill="#847d72">${caption}</text>`
+    );
+  };
+
+  const arrowPieces: string[] = [];
+  const arrowColors = [...new Set(arrows.map((a) => a.color))];
+  const markerId = new Map(arrowColors.map((c, i) => [c, `map-arrow-${i}`]));
+  const arrowDefs = arrowColors
+    .map(
+      (c) =>
+        `<marker id="${markerId.get(c)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${c}"/></marker>`,
+    )
+    .join("");
+  for (const a of arrows) {
+    const sc = cardById.get(a.sourceId);
+    const tc = cardById.get(a.targetId);
+    if (!sc || !tc) continue;
+    const sp = rectEdgePoint(
+      sc.pos,
+      sc.w + MAP_GAP * 2,
+      sc.h + MAP_GAP * 2,
+      tc.pos,
+    );
+    const tp = rectEdgePoint(
+      tc.pos,
+      tc.w + MAP_GAP * 2,
+      tc.h + MAP_GAP * 2,
+      sc.pos,
+    );
+    const mx = (sp.x + tp.x) / 2 + ox;
+    const my = (sp.y + tp.y) / 2 + oy;
+    arrowPieces.push(
+      `<path d="M${sp.x + ox} ${sp.y + oy} L${tp.x + ox} ${tp.y + oy}" fill="none" stroke="${a.color}" stroke-width="2" marker-end="url(#${markerId.get(a.color)})"/>`,
+    );
+    if (a.label) {
+      const label = escapeXml(a.label);
+      const pw = Math.ceil(measure(a.label, 11)) + 16;
+      arrowPieces.push(
+        `<rect x="${mx - pw / 2}" y="${my - 9}" width="${pw}" height="18" rx="9" fill="#fdfcfa" stroke="#e4e0d8"/>`,
+        `<text x="${mx}" y="${my}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="11" fill="#6f6a62">${label}</text>`,
+      );
+    }
+  }
+
+  const cardPieces = cards.map((c) => {
+    const x = c.pos.x - c.w / 2 + ox;
+    const y = c.pos.y - c.h / 2 + oy;
+    // SHAPE_RADIUS's "999px"/"pill" clamps to h/2 automatically once it
+    // exceeds half the rect's own height — SVG's own rx-clamping rule —
+    // so parsing it straight through is enough; only "50%" (ellipse)
+    // needs the dedicated <ellipse> element below instead of rx.
+    const r = parseFloat(SHAPE_RADIUS[c.part.shape]);
+    const shape =
+      c.part.shape === "ellipse"
+        ? `<ellipse cx="${c.pos.x + ox}" cy="${c.pos.y + oy}" rx="${c.w / 2}" ry="${c.h / 2}" fill="${c.part.color}" stroke="rgba(58,55,51,0.08)"/>`
+        : `<rect x="${x}" y="${y}" width="${c.w}" height="${c.h}" rx="${r}" fill="${c.part.color}" stroke="rgba(58,55,51,0.08)"/>`;
+    const back = partIsBack(c.part)
+      ? `<rect x="${c.pos.x + ox + c.w / 2 - 30}" y="${c.pos.y + oy - c.h / 2 - 10}" width="30" height="14" rx="7" fill="#6f6a62"/>` +
+        `<text x="${c.pos.x + ox + c.w / 2 - 15}" y="${c.pos.y + oy - c.h / 2 - 3}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="8" fill="#fff">back</text>`
+      : "";
+    return (
+      shape +
+      `<text x="${c.pos.x + ox}" y="${c.pos.y + oy}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="${FONT_PX[c.part.fontSize]}" font-weight="${c.part.bold ? 600 : 400}" fill="#3a3733">${escapeXml(c.label)}</text>` +
+      back
+    );
+  });
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<defs>${arrowDefs}</defs>` +
+    `<rect width="${w}" height="${h}" fill="#f7f5f1"/>` +
+    figureSvg("front") +
+    figureSvg("back") +
+    arrowPieces.join("") +
+    cardPieces.join("") +
+    `</svg>`;
+  return { svg, w, h };
+}
+
+/** Rasterize the spatial map (body + parts + arrows, in their real
+ *  positions) at 2× and download it as a PNG — a snapshot of the actual
+ *  canvas, not the abstract flowchart above. Resolves true only when the
+ *  file was actually handed to the browser. */
+export async function downloadMapPng(
+  parts: Part[],
+  arrows: Arrow[],
+  bodyScale: number,
+): Promise<boolean> {
+  const built = mapSvg(parts, arrows, bodyScale);
+  if (!built) return false;
+  return rasterizeSvgToPng(built.svg, built.w, built.h, "parts-map.png");
 }

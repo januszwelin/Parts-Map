@@ -14,6 +14,13 @@ export const partSurface = (p: Part): Depth =>
   partIsBack(p) ? "back" : "front";
 
 export const FONT_PX: Record<FontSize, number> = { s: 12, m: 14, l: 17 };
+/** Human-readable names for the size chips (aria-label — "A" reads as
+ *  nothing to a screen reader without one). */
+export const FONT_SIZE_LABELS: Record<FontSize, string> = {
+  s: "small",
+  m: "medium",
+  l: "large",
+};
 export const SHAPE_RADIUS: Record<Shape, string> = {
   rounded: "14px",
   square: "5px",

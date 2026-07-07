@@ -43,11 +43,25 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
+    // suppressHydrationWarning on <html>/<body>: browser extensions (and
+    // some mobile in-app browsers) inject attributes/classes onto these
+    // top-level elements before React hydrates — e.g. a `vc-init` class on
+    // <body> — which React would otherwise report as a hydration mismatch
+    // in the console. It suppresses only these two elements' own
+    // attributes (one level deep), not their subtree, so real mismatches
+    // inside the app still surface. This is the Next.js-recommended fix for
+    // extension-caused top-level mismatches.
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="h-dvh overflow-hidden overscroll-none">{children}</body>
+      <body
+        className="h-dvh overflow-hidden overscroll-none"
+        suppressHydrationWarning
+      >
+        {children}
+      </body>
     </html>
   );
 }

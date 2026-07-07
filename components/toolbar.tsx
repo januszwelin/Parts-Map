@@ -5,7 +5,7 @@
    floating frame-map button
    ════════════════════════════════════════════════════════════════════ */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MIN_SCALE, MAX_SCALE } from "@/lib/tuning";
 import { panelStyle } from "@/lib/ui";
 import { authClient } from "@/lib/auth-client";
@@ -36,6 +36,28 @@ function SoundIcon({ on }: { on: boolean }) {
   );
 }
 
+/** Curved arrow — mirrored for redo. The only visible Undo/Redo affordance
+ *  in the app; Ctrl/Cmd+Z has no equivalent on a touchscreen. */
+function UndoIcon({ mirrored }: { mirrored?: boolean }) {
+  return (
+    <svg
+      width={15}
+      height={15}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ display: "block", transform: mirrored ? "scaleX(-1)" : undefined }}
+      aria-hidden
+    >
+      <path d="M7 8 3 12l4 4" />
+      <path d="M3 12h11a6 6 0 0 1 0 12h-2" />
+    </svg>
+  );
+}
+
 export function Toolbar(props: {
   onAdd: (name: string) => void;
   /** The name field lives in the parent so cancelling a tap-to-place
@@ -61,6 +83,15 @@ export function Toolbar(props: {
   /** Opt-in local draft (keeps work across an accidental tab-close). */
   draftEnabled: boolean;
   onToggleDraft: (on: boolean) => void;
+  /** Visible Undo/Redo — Ctrl/Cmd+Z has no touchscreen equivalent, so this
+   *  is the only way to undo a mis-tap on phone. Labels name the action
+   *  that would be undone/redone, when known. */
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+  onUndo: () => void;
+  onRedo: () => void;
 }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [bodyOpen, setBodyOpen] = useState(false);
@@ -101,6 +132,18 @@ export function Toolbar(props: {
     setConfirmDelete(false);
     setDeleteError(null);
   };
+  // These popovers previously only closed via the click-outside catcher
+  // below — unusable by keyboard/switch users, since nothing else was
+  // reachable to dismiss them.
+  const anyPopoverOpen = sheetOpen || bodyOpen || accountOpen;
+  useEffect(() => {
+    if (!anyPopoverOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePopovers();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [anyPopoverOpen]);
   const btn =
     "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-10";
 
@@ -157,6 +200,38 @@ export function Toolbar(props: {
         >
           {props.listOpen ? "◂ list" : "☰ list"}
         </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            aria-label={
+              props.undoLabel ? `Undo — ${props.undoLabel}` : "Undo"
+            }
+            title={props.undoLabel ? `Undo — ${props.undoLabel}` : "Undo"}
+            disabled={!props.canUndo}
+            className={`${btn} disabled:opacity-30`}
+            style={{ color: "var(--ink-soft)" }}
+            onClick={() => {
+              closePopovers();
+              props.onUndo();
+            }}
+          >
+            <UndoIcon />
+          </button>
+          <button
+            aria-label={
+              props.redoLabel ? `Redo — ${props.redoLabel}` : "Redo"
+            }
+            title={props.redoLabel ? `Redo — ${props.redoLabel}` : "Redo"}
+            disabled={!props.canRedo}
+            className={`${btn} disabled:opacity-30`}
+            style={{ color: "var(--ink-soft)" }}
+            onClick={() => {
+              closePopovers();
+              props.onRedo();
+            }}
+          >
+            <UndoIcon mirrored />
+          </button>
+        </div>
         <input
           className="w-24 min-w-0 flex-1 rounded-lg px-3 py-1.5 text-sm outline-none sm:w-44 sm:flex-none"
           style={{
@@ -198,6 +273,7 @@ export function Toolbar(props: {
           className={`${btn} hidden items-center gap-1.5 sm:inline-flex`}
           style={{ color: "var(--ink-soft)" }}
           onClick={props.onSave}
+          aria-live="polite"
           title={
             props.saveStatus === "dirty"
               ? "Unsaved changes — Save to a file"
@@ -315,14 +391,14 @@ export function Toolbar(props: {
                       Delete your account and all cloud maps?
                     </p>
                     {deleteError && (
-                      <p className="pb-1.5 text-[11px]" style={{ color: "#A05B5B" }}>
+                      <p className="pb-1.5 text-[11px]" style={{ color: "var(--danger)" }}>
                         {deleteError}
                       </p>
                     )}
                     <div className="flex gap-1.5">
                       <button
                         className="flex-1 rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
-                        style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                        style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                         disabled={deleting}
                         onClick={deleteAccount}
                       >
@@ -344,7 +420,7 @@ export function Toolbar(props: {
                 ) : (
                   <button
                     className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
-                    style={{ color: "#A05B5B" }}
+                    style={{ color: "var(--danger)" }}
                     onClick={() => setConfirmDelete(true)}
                   >
                     Delete account
@@ -503,14 +579,14 @@ export function Toolbar(props: {
                       Delete your account and all cloud maps?
                     </p>
                     {deleteError && (
-                      <p className="pb-1.5 text-[11px]" style={{ color: "#A05B5B" }}>
+                      <p className="pb-1.5 text-[11px]" style={{ color: "var(--danger)" }}>
                         {deleteError}
                       </p>
                     )}
                     <div className="flex gap-1.5">
                       <button
                         className="flex-1 rounded-md px-2 py-1.5 text-[11px] disabled:opacity-60"
-                        style={{ color: "#A05B5B", background: "rgba(192,138,138,0.12)" }}
+                        style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                         disabled={deleting}
                         onClick={deleteAccount}
                       >
@@ -532,7 +608,7 @@ export function Toolbar(props: {
                 ) : (
                   <button
                     className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-                    style={{ color: "#A05B5B" }}
+                    style={{ color: "var(--danger)" }}
                     onClick={() => setConfirmDelete(true)}
                   >
                     Delete account

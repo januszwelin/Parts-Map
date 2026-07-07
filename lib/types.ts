@@ -29,6 +29,8 @@ export type Part = {
   note?: string;
 };
 
+export type HandleSide = "st" | "sr" | "sb" | "sl";
+
 export type Arrow = {
   id: string;
   sourceId: string;
@@ -36,6 +38,14 @@ export type Arrow = {
   color: string;
   /** Optional short relationship label ("manages", "protects", …). */
   label?: string;
+  /** Which connect dot the arrow was actually dragged from (matches the
+   *  source Handle ids in part-node.tsx — st/sr/sb/sl). The target side has
+   *  no equivalent: connections drop anywhere on the target card (a single
+   *  full-card Handle, deliberately, so touch drops stay forgiving), so
+   *  there's no target "side" to record. Undefined for arrows saved before
+   *  this field existed — FloatingEdge falls back to its old center-to-center
+   *  geometry for those. */
+  sourceHandle?: HandleSide;
 };
 
 export type MapDoc = {

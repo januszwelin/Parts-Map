@@ -15,6 +15,11 @@ export type AppApi = {
   setDepth: (id: string, depth: Depth) => void;
   endResize: (id: string) => void;
   updateArrow: (id: string, patch: Partial<Arrow>) => void;
+  /** Draw an arrow between two parts by id — the pointer-free counterpart
+   *  to dragging a connect dot, so the relationships that are the point of
+   *  the tool are reachable by keyboard/switch users too. No-ops on a
+   *  self-link or an exact duplicate. */
+  connectParts: (sourceId: string, targetId: string) => void;
   /** Swap an arrow's source and target — IFS direction ("who protects
    *  whom") matters, and this beats delete-and-redraw. */
   reverseArrow: (id: string) => void;
@@ -32,3 +37,11 @@ export const useAppApi = () => {
   if (!api) throw new Error("AppApiContext missing");
   return api;
 };
+
+/** The live parts array, exposed to the editor's "draw arrow to…" picker
+ *  so it can list link targets. Deliberately separate from AppApi (which
+ *  is a stable bag of callbacks): this value changes on every edit, so
+ *  only the components that actually need the list subscribe to it —
+ *  keeping it out of node `data` preserves PartNode's memoization. */
+export const PartsListContext = React.createContext<Part[]>([]);
+export const usePartsList = () => React.useContext(PartsListContext);

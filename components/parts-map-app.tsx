@@ -60,7 +60,14 @@ import {
   ARROW_COLORS,
 } from "@/lib/tuning";
 import { REGIONS, REGION_BY_KEY } from "@/lib/regions";
-import { newId, type Depth, type Part, type Arrow, type MapDoc } from "@/lib/types";
+import {
+  newId,
+  type Depth,
+  type Part,
+  type Arrow,
+  type MapDoc,
+  type HandleSide,
+} from "@/lib/types";
 import {
   figureCenterX,
   anchorToFlow,
@@ -75,6 +82,7 @@ import {
   easeOutBack,
   easeInOutCubic,
   easeOutCubic,
+  derivePositions,
 } from "@/lib/geometry";
 import {
   matchRegion,
@@ -95,9 +103,9 @@ import { sndPlay, sndSetMuted, magnetTick } from "@/lib/sound";
 import { haptic } from "@/lib/haptics";
 import { getWelcomeSeen, setWelcomeSeen } from "@/lib/onboarding";
 import { sampleMap } from "@/lib/sample-map";
-import { partSurface } from "@/lib/part-utils";
+import { partSurface, locationDisplay } from "@/lib/part-utils";
 import { panelStyle } from "@/lib/ui";
-import { AppApiContext, type AppApi } from "@/hooks/use-app-api";
+import { AppApiContext, PartsListContext, type AppApi } from "@/hooks/use-app-api";
 import { useIsPhone, useReducedMotion } from "@/hooks/use-media";
 import {
   BodyOutline,
@@ -158,42 +166,6 @@ const eventClient = (e: unknown): XYPosition | null => {
     : null;
 };
 
-/** Derived render centers for every part (no drag override applied) — the
- *  one place location → x,y happens, shared by the render memo and the
- *  settle tweens so they can never disagree. A part renders on the
- *  figure of the surface it sits on (its depth; back regions are always
- *  the back figure). */
-function derivePositions(
-  parts: Part[],
-  bodyScale: number,
-): Map<string, XYPosition> {
-  const out = new Map<string, XYPosition>();
-  const groupCount = new Map<string, number>();
-  for (const p of parts) {
-    const region = REGION_BY_KEY[p.location];
-    if (p.offBody || !region || region.offBody) {
-      out.set(p.id, p.freePos);
-      continue;
-    }
-    let pos = anchorToFlow(region, partSurface(p), bodyScale);
-    // Co-located parts (same region + depth) fan out in a small
-    // deterministic spiral — scaling alone can never separate parts
-    // that sit on the same point.
-    const gk = `${p.location}:${p.depth}`;
-    const n = groupCount.get(gk) ?? 0;
-    groupCount.set(gk, n + 1);
-    if (n > 0) {
-      const angle = n * 2.4;
-      const rad = 18 + 7 * n;
-      pos = {
-        x: pos.x + Math.cos(angle) * rad,
-        y: pos.y + Math.sin(angle) * rad,
-      };
-    }
-    out.set(p.id, pos);
-  }
-  return out;
-}
 
 function PartsMapApp() {
   const rf = useReactFlow();
@@ -394,6 +366,15 @@ function PartsMapApp() {
   /** Anything worth undoing is also unsaved — the beforeunload guard
    *  reads this. Cleared on save and on load. */
   const dirtyRef = useRef(false);
+  /** Reactive mirrors of historyRef/redoRef length + top label, purely so
+   *  the toolbar's Undo/Redo buttons (mobile has no other way to undo —
+   *  Ctrl/Cmd+Z doesn't exist on a touchscreen) can show enabled state and
+   *  name what they'd do. The refs stay the source of truth; these never
+   *  drive logic. */
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [undoLabel, setUndoLabel] = useState<string | null>(null);
+  const [redoLabel, setRedoLabel] = useState<string | null>(null);
   /** Single entry point for "the map changed": flips the ref the unload
    *  guard reads, lights the toolbar indicator, and bumps the debounce
    *  nonce that drives cloud auto-save + the local draft. */
@@ -408,11 +389,14 @@ function PartsMapApp() {
     markDirty();
     // A fresh action forks the timeline — the redo branch is now stale.
     redoRef.current = [];
+    setCanRedo(false);
+    setRedoLabel(null);
     const h = historyRef.current;
     const now = Date.now();
     const top = h[h.length - 1];
     if (top && top.tag === tag && now - top.at < 1000) {
       top.at = now;
+      setUndoLabel(label);
       return;
     }
     h.push({
@@ -423,6 +407,8 @@ function PartsMapApp() {
       at: now,
     });
     if (h.length > 30) h.shift();
+    setCanUndo(true);
+    setUndoLabel(label);
   }, [markDirty]);
 
   /* One-time touch hint: the connect dots have no hover to reveal them
@@ -724,6 +710,10 @@ function PartsMapApp() {
     setSelectedEdgeId(null);
     autoArmedRef.current = false;
     setNotice({ text: `Undid — ${snap.label}`, key: Date.now() });
+    setCanUndo(historyRef.current.length > 0);
+    setUndoLabel(historyRef.current[historyRef.current.length - 1]?.label ?? null);
+    setCanRedo(true);
+    setRedoLabel(snap.label);
   }, [cancelSettle]);
 
   /** Re-apply the last undone change. Symmetric with undo: banks the current
@@ -748,6 +738,10 @@ function PartsMapApp() {
     autoArmedRef.current = false;
     markDirty();
     setNotice({ text: `Redid — ${snap.label}`, key: Date.now() });
+    setCanRedo(redoRef.current.length > 0);
+    setRedoLabel(redoRef.current[redoRef.current.length - 1]?.label ?? null);
+    setCanUndo(true);
+    setUndoLabel(snap.label);
   }, [cancelSettle, markDirty]);
 
   const settleTween = useCallback(
@@ -763,6 +757,22 @@ function PartsMapApp() {
       },
     ) => {
       cancelSettle();
+      if (
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+        false
+      ) {
+        // Land instantly at the anchor — no glide, no put-down relax —
+        // but the touchdown effects (pop, ripple, sound, haptic) still
+        // fire, same as they would at the end of a normal glide.
+        const el = innerElsRef.current.get(id);
+        if (el) {
+          el.style.transform = "";
+          el.style.transition = "";
+        }
+        setDragOverride(null);
+        opts?.onLand?.();
+        return;
+      }
       settlingRef.current = true;
       settleStateRef.current = { id, putDown: !!opts?.putDown };
       const start = performance.now();
@@ -838,6 +848,21 @@ function PartsMapApp() {
       const side: Depth = (w / 2 - vp0.x) / z0 > 0 ? "back" : "front";
       // Screen x the framed figure's center must hold through the tween.
       const sx = figureCenterX(side, from) * z0 + vp0.x;
+      if (
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+        false
+      ) {
+        setBodyScale(to);
+        if (phone) {
+          const z = z0 * (from / to);
+          rf.setViewport({
+            x: sx - figureCenterX(side, to) * z,
+            y: vp0.y,
+            zoom: z,
+          });
+        }
+        return;
+      }
       const start = performance.now();
       const D = 650;
       const step = (now: number) => {
@@ -864,6 +889,12 @@ function PartsMapApp() {
   /* ——— the lift rAF loop: steering, sticky magnet, drag-follow camera ——— */
   const startLiftLoop = useCallback(() => {
     cancelAnimationFrame(liftRafRef.current);
+    // Checked once per drag, not per frame — this doesn't change mid-gesture.
+    // Only gates the decorative tilt/lag/squash physics below; the actual
+    // cursor-follow positioning (functional, not decorative) is unaffected.
+    const noTiltPhysics =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+      false;
     const loop = () => {
       const info = liftInfoRef.current;
       if (!info) return;
@@ -1146,10 +1177,19 @@ function PartsMapApp() {
         tl.thetaV *= 0.75; // slight overshoot when the drag stops
         tl.theta += tl.thetaV;
         tl.liftAmt += (1 - tl.liftAmt) * 0.22; // pickup eases in, no snap
-        const lag = Math.max(-6, Math.min(6, -tl.vf * 0.3));
-        el.style.transform = `translate(${lag}px, ${-6 * tl.liftAmt}px) scale(${
-          1 + 0.03 * tl.liftAmt
-        }) rotate(${tl.theta}deg)`;
+        // The state above keeps updating regardless (settleTween's putDown
+        // pose reads tl.theta/liftAmt at release, and other code corrects
+        // tl.prevX for camera-induced shift) — only the visual application
+        // is skipped, so a lifted card doesn't tilt/lag/squash for someone
+        // who's asked for reduced motion.
+        if (noTiltPhysics) {
+          el.style.transform = "";
+        } else {
+          const lag = Math.max(-6, Math.min(6, -tl.vf * 0.3));
+          el.style.transform = `translate(${lag}px, ${-6 * tl.liftAmt}px) scale(${
+            1 + 0.03 * tl.liftAmt
+          }) rotate(${tl.theta}deg)`;
+        }
       }
 
       liftRafRef.current = requestAnimationFrame(loop);
@@ -1446,9 +1486,38 @@ function PartsMapApp() {
           // pointer; RF's grab-offset position would fight it.
         } else if (ch.dragging || resizingRef.current === ch.id) {
           setDragOverride({ id: ch.id, pos: ch.position });
+        } else {
+          // Not a pointer drag or resize: this is React Flow's own default
+          // keyboard behavior (arrow keys nudge a focused, selected node).
+          // It used to be silently discarded here — the card visibly moved
+          // but nothing persisted, so it snapped back on the next
+          // unrelated re-render. Commit it exactly like a drop would:
+          // magnet-resolve the landing point the same way onNodeDragStop
+          // does, so an on-body part still only ever sits on a named
+          // anchor (consistent with the text-authoritative location model
+          // — this can mean a nudge jumps between anchors rather than
+          // creeping pixel by pixel, which matches how dragging already
+          // behaves) and an off-body part moves freely.
+          const pos = ch.position;
+          const scale = bodyScaleRef.current;
+          const { near, hit } = resolveMagnet(pos, scale);
+          pushHistory(`move:${ch.id}`, "move");
+          setParts((ps) =>
+            ps.map((p) =>
+              p.id === ch.id
+                ? hit && near
+                  ? { ...p, offBody: false, location: near.region.key, depth: near.depth }
+                  : {
+                      ...p,
+                      offBody: true,
+                      freePos: pos,
+                      location: nearestOffZone(pos, scale),
+                      depth: "front",
+                    }
+                : p,
+            ),
+          );
         }
-        // The final non-dragging position is ignored — drop commits are
-        // handled in onNodeDragStop against the parts array.
       } else if (ch.type === "select") {
         setSelectedId((prev) =>
           ch.selected ? ch.id : prev === ch.id ? null : prev,
@@ -1516,6 +1585,11 @@ function PartsMapApp() {
           sourceId: conn.source,
           targetId: conn.target,
           color: ARROW_COLORS[0],
+          // The specific dot dragged from, so the edge can exit from that
+          // fixed side instead of recomputing one from geometry alone (see
+          // FloatingEdge). The target has no equivalent — see the Arrow
+          // type's comment.
+          sourceHandle: conn.sourceHandle as HandleSide | undefined,
         },
       ]);
     },
@@ -1647,12 +1721,44 @@ function PartsMapApp() {
           as.map((a) => (a.id === id ? { ...a, ...patch } : a)),
         );
       },
+      connectParts: (sourceId, targetId) => {
+        if (!sourceId || !targetId || sourceId === targetId) return;
+        // No sourceHandle: a keyboard/menu link has no dragged-from dot, so
+        // FloatingEdge falls back to its dynamic geometry on both ends.
+        // Skip an exact duplicate so the picker can't silently stack a
+        // second identical arrow the user can't tell apart.
+        if (
+          arrowsRef.current.some(
+            (a) => a.sourceId === sourceId && a.targetId === targetId,
+          )
+        ) {
+          return;
+        }
+        pushHistory("arrow-add", "arrow");
+        setArrows((as) => [
+          ...as,
+          {
+            id: newId("arrow"),
+            sourceId,
+            targetId,
+            color: ARROW_COLORS[0],
+          },
+        ]);
+      },
       reverseArrow: (id) => {
         pushHistory(`arrow-reverse:${id}`, "arrow reversed");
         setArrows((as) =>
           as.map((a) =>
             a.id === id
-              ? { ...a, sourceId: a.targetId, targetId: a.sourceId }
+              ? {
+                  ...a,
+                  sourceId: a.targetId,
+                  targetId: a.sourceId,
+                  // The old sourceHandle described a side of the old
+                  // source card — meaningless now that it's the target.
+                  // Fall back to the dynamic geometry on both ends.
+                  sourceHandle: undefined,
+                }
               : a,
           ),
         );
@@ -1993,6 +2099,10 @@ function PartsMapApp() {
       // A fresh document: yesterday's history belongs to the old map.
       historyRef.current = [];
       redoRef.current = [];
+      setCanUndo(false);
+      setCanRedo(false);
+      setUndoLabel(null);
+      setRedoLabel(null);
       setMeasuredDims(new Map());
       dirtyRef.current = false;
       setSaveStatus("clean");
@@ -2072,9 +2182,16 @@ function PartsMapApp() {
         applyLoadedDoc(doc);
         // A file load replaces whatever cloud map was open, if any.
         cloudDocRef.current = null;
-      } catch {
+      } catch (e) {
+        // Two different failures used to show the same message: the file
+        // genuinely couldn't be read (a mobile file picker can hand back an
+        // undownloaded iCloud/Drive placeholder — a real plumbing failure,
+        // not a bad file) vs. it read fine but isn't valid Parts Map JSON.
+        const readFailure = e instanceof DOMException;
         setNotice({
-          text: "Couldn't read that file — it doesn't look like a Parts Map JSON.",
+          text: readFailure
+            ? "Couldn't read that file — try picking it again."
+            : "Couldn't read that file — it doesn't look like a Parts Map JSON.",
           key: Date.now(),
         });
       }
@@ -2220,7 +2337,11 @@ function PartsMapApp() {
       }
       if (typing || placingRef.current) return;
       if (e.key === "Escape") {
+        // Whichever modal is on top closes first — MyMaps and Welcome used
+        // to have no Escape path at all (only Import did).
         if (importOpen) setImportOpen(false);
+        else if (myMapsOpen) setMyMapsOpen(false);
+        else if (welcomeOpen) setWelcomeOpen(false);
         else {
           setSelectedEdgeId(null);
           setSelectedId(null);
@@ -2241,7 +2362,7 @@ function PartsMapApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, importOpen, selectedId]);
+  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, selectedId]);
 
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
@@ -2392,6 +2513,10 @@ function PartsMapApp() {
         // on every rebuild of these fresh node objects (RF error #015).
         measured: md ? { width: md.w, height: md.h } : undefined,
         selected: p.id === selectedId,
+        // The only accessible-name a screen reader gets for this card —
+        // previously just whatever text happened to be inside it, so
+        // location/note/surface never reached assistive tech at all.
+        ariaLabel: `${p.name} — ${locationDisplay(p)}${p.note ? ", has a note" : ""}`,
         data: {
           part: p,
           lifted: lift?.id === p.id,
@@ -2419,7 +2544,7 @@ function PartsMapApp() {
         source: a.sourceId,
         target: a.targetId,
         selected: a.id === selectedEdgeId,
-        data: { color: a.color, label: a.label },
+        data: { color: a.color, label: a.label, sourceHandle: a.sourceHandle },
         style: { stroke: a.color, strokeWidth: 2 },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -2433,6 +2558,7 @@ function PartsMapApp() {
 
   return (
     <AppApiContext.Provider value={api}>
+     <PartsListContext.Provider value={parts}>
       <div
         ref={wrapperRef}
         className="relative h-dvh w-full"
@@ -2476,6 +2602,11 @@ function PartsMapApp() {
           multiSelectionKeyCode={null}
           selectionOnDrag={false}
           deleteKeyCode={["Backspace", "Delete"]}
+          // Off-screen cards/arrows skip rendering entirely — relevant once
+          // a map gets crowded (30-60+ parts) or the camera is zoomed into
+          // one figure. The actively dragged/lifted node is always under
+          // the pointer, so it's never the thing that's off-screen.
+          onlyRenderVisibleElements
           style={{ background: "var(--canvas)" }}
         >
           <ViewportPortal>
@@ -2565,6 +2696,12 @@ function PartsMapApp() {
           saveStatus={saveStatus}
           draftEnabled={draftEnabled}
           onToggleDraft={toggleDraft}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          undoLabel={undoLabel}
+          redoLabel={redoLabel}
+          onUndo={undo}
+          onRedo={redo}
         />
         <FrameMapButton
           onFrame={() => {
@@ -2578,21 +2715,25 @@ function PartsMapApp() {
           <PhonePartsSheet
             parts={parts}
             arrows={arrows}
+            bodyScale={bodyScale}
             open={listOpen && !lift && !placing}
             onReveal={revealPart}
             onClose={() => setListOpen(false)}
             onExportMenuOpenChange={setExportMenuOpen}
+            onNotice={(text) => setNotice({ text, key: Date.now() })}
           />
         ) : (
           <PartsListPanel
             parts={parts}
             arrows={arrows}
+            bodyScale={bodyScale}
             open={listOpen}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onReveal={revealPart}
             onClose={() => setListOpen(false)}
             onExportMenuOpenChange={setExportMenuOpen}
+            onNotice={(text) => setNotice({ text, key: Date.now() })}
           />
         )}
         {/* Phone card editor — bottom sheet; hides while dragging/placing
@@ -2613,6 +2754,7 @@ function PartsMapApp() {
           <div
             key={notice.key}
             data-ui-chrome
+            role="status"
             className="fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full py-1.5 pl-4 pr-1.5 sm:bottom-auto sm:top-16"
             style={{ ...panelStyle, touchAction: "manipulation" }}
           >
@@ -2734,6 +2876,7 @@ function PartsMapApp() {
           <CoachMarks step={tourStep!} snapshot={tourSnapshot} onSkip={skipTour} />
         )}
       </div>
+     </PartsListContext.Provider>
     </AppApiContext.Provider>
   );
 }

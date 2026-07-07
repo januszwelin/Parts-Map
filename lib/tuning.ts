@@ -100,13 +100,46 @@ export const PALETTE = [
   "#E7E5E0",
 ] as const;
 
+/** Human-readable names for PALETTE, in the same order — a screen reader
+ *  announcing "Color #dce3d5" is meaningless; this is what the hex should
+ *  actually be labeled as. */
+export const PALETTE_NAMES: Record<string, string> = {
+  "#DCE3D5": "sage",
+  "#E8D8CC": "clay",
+  "#D3DEE6": "dusty blue",
+  "#E0D6E2": "mauve",
+  "#EAE3D0": "sand",
+  "#D5DBDE": "slate",
+  "#EBDBD8": "blush",
+  "#E7E5E0": "fog",
+};
+
+/** Two entries darkened slightly from their original values (#B08968 →
+ *  #AA8261, #C08A8A → #B07C7C) — both fell under WCAG 1.4.11's 3:1 minimum
+ *  for meaningful graphics against --canvas (2.91:1 and 2.66:1 measured).
+ *  Existing saved arrows keep whichever exact color they already have
+ *  (colors are stored per-arrow, not looked up by index) — this only
+ *  changes what new picks look like going forward. */
 export const ARROW_COLORS = [
   "#7D8B74",
   "#A98467",
   "#6E8898",
   "#9A7E9F",
-  "#B08968",
+  "#AA8261",
   "#5C6B73",
-  "#C08A8A",
+  "#B07C7C",
   "#8A8578",
 ] as const;
+
+/** Human-readable names for ARROW_COLORS, same order/purpose as
+ *  PALETTE_NAMES. */
+export const ARROW_COLOR_NAMES: Record<string, string> = {
+  "#7D8B74": "sage",
+  "#A98467": "clay",
+  "#6E8898": "slate blue",
+  "#9A7E9F": "mauve",
+  "#AA8261": "sand",
+  "#5C6B73": "slate",
+  "#B07C7C": "rose",
+  "#8A8578": "moss",
+};

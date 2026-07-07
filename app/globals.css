@@ -5,13 +5,25 @@
   --canvas: #f7f5f1;
   --ink: #3a3733;
   --ink-soft: #6f6a62;
-  /* Darkened from #a8a29a (~2.3:1 on --canvas, a WCAG AA fail) to ~3.7:1 —
-     passes AA for large text with margin while staying the quietest tier.
-     Kept lighter than --ink-soft so the caption/hint hierarchy survives. */
-  --ink-faint: #847d72;
+  /* Darkened from #a8a29a (~2.3:1 on --canvas, a WCAG AA fail), then again
+     from #847d72 (~3.7:1 — only passed AA for *large* text, but this token
+     is used as small 11-12px caption/hint text throughout the app) to
+     ~4.64:1, clearing AA for normal text too. This sits close to --ink-soft
+     (~4.93:1) — there isn't much room between "passes AA at this size" and
+     "--ink-soft," so the two read as nearly the same weight now; still the
+     quieter of the two. */
+  --ink-faint: #746e64;
   --line: #e4e0d8;
   --panel: rgba(253, 252, 250, 0.92);
   --accent: #7d8b74; /* muted sage — indicator / focus */
+  /* Delete/danger red — was a literal #A05B5B duplicated across a dozen
+     inline styles (part editor, arrow popover, my-maps, toolbar, sign-in),
+     which is how the tinted-background case quietly drifted under AA
+     (~4.4:1, measured) while the plain-text case stayed fine: one hex, two
+     unnoticed outcomes. Darkened slightly (~#965050) so the tinted-button
+     text clears 4.5:1 too, and centralized so there's one place to tune. */
+  --danger: #965050;
+  --danger-bg: rgba(150, 80, 80, 0.12);
 
   --shadow-rest:
     0 1px 3px rgba(60, 50, 40, 0.1), 0 4px 12px rgba(60, 50, 40, 0.07);
@@ -56,18 +68,23 @@ body {
 /* ————— Part card lift choreography —————
    While lifted, the transform is owned entirely by the drag rAF loop
    (velocity tilt + lag + eased pickup, written inline); the class carries
-   only the shadow. The loop suspends the transform transition for the
-   duration of the drag and restores it on drop so the tilt relaxes back
-   through this 180ms ease. */
+   the shadow and a slight translucency. The loop suspends the transform
+   transition for the duration of the drag and restores it on drop so the
+   tilt relaxes back through this 180ms ease. The opacity dip reads as "picked
+   up off the surface" and lets the anchor pulse/spotlight underneath show
+   through even when the card is hovering directly over it. */
 .part-inner {
   box-shadow: var(--shadow-rest);
+  opacity: 1;
   transition:
     transform 180ms cubic-bezier(0.33, 1, 0.68, 1),
-    box-shadow 180ms cubic-bezier(0.33, 1, 0.68, 1);
+    box-shadow 180ms cubic-bezier(0.33, 1, 0.68, 1),
+    opacity 180ms cubic-bezier(0.33, 1, 0.68, 1);
   will-change: transform, box-shadow;
 }
 .part-inner.lifted {
   box-shadow: var(--shadow-lift);
+  opacity: 0.85;
 }
 
 /* ————— Lift target indicator ————— */
@@ -398,7 +415,9 @@ input[type="range"]::-moz-range-thumb {
     animation: none;
   }
   .part-inner {
-    transition: box-shadow 120ms ease;
+    transition:
+      box-shadow 120ms ease,
+      opacity 120ms ease;
   }
   .coach-bob {
     animation: none;

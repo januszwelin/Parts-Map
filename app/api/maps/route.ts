@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/db";
 import { maps } from "@/db/schema";
@@ -19,7 +19,20 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const rows = await db
-    .select({ id: maps.id, title: maps.title, updatedAt: maps.updatedAt })
+    .select({
+      id: maps.id,
+      title: maps.title,
+      updatedAt: maps.updatedAt,
+      // Count parts from the jsonb doc without pulling it over the wire.
+      // Guarded by a typeof check so a malformed row can never error the
+      // whole list (parseMapJson always stores parts as an array, but the
+      // list endpoint stays defensive since it's read-only and cheap).
+      partCount: sql<number>`
+        case when jsonb_typeof(${maps.doc} -> 'parts') = 'array'
+             then jsonb_array_length(${maps.doc} -> 'parts')
+             else 0 end
+      `.mapWith(Number),
+    })
     .from(maps)
     .where(eq(maps.userId, session.user.id))
     .orderBy(desc(maps.updatedAt));

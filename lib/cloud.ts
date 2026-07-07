@@ -18,7 +18,15 @@ export class CloudError extends Error {
   }
 }
 
-export type MapSummary = { id: string; title: string; updatedAt: string };
+export type MapSummary = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  /** Number of parts in the map — computed by the list endpoint from the
+   *  stored doc. Optional because the create/update responses don't carry
+   *  it (the "My maps" list re-fetches after those, which does). */
+  partCount?: number;
+};
 export type MapRecord = MapSummary & { doc: MapDoc };
 
 async function asJson<T>(res: Response): Promise<T> {

@@ -36,6 +36,13 @@ export const auth = betterAuth({
   ...(baseURL ? { baseURL, trustedOrigins: [baseURL] } : {}),
   emailAndPassword: {
     enabled: true,
+    // No transactional-email provider is wired up yet — this logs the reset
+    // link server-side so the flow is fully testable locally, but it MUST
+    // be replaced with a real send (Resend/Postmark/SES/etc.) before this
+    // ships to real users, or nobody actually receives their reset link.
+    sendResetPassword: async ({ user, url }) => {
+      console.log(`[auth] Password reset for ${user.email}: ${url}`);
+    },
   },
   user: {
     deleteUser: {
@@ -57,6 +64,7 @@ export const auth = betterAuth({
     customRules: {
       "/sign-in/email": { window: 60, max: 5 },
       "/sign-up/email": { window: 3600, max: 10 },
+      "/request-password-reset": { window: 3600, max: 5 },
     },
   },
   // Cross-subdomain SSO (per the handoff checklist's "one identity across

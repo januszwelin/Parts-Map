@@ -4,7 +4,7 @@
    PART NODE — the card on the canvas
    ════════════════════════════════════════════════════════════════════ */
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import {
   NodeToolbar,
   NodeResizer,
@@ -25,7 +25,16 @@ export type PartNodeType = Node<
   "part"
 >;
 
-export function PartNode({
+/** Memoized with a custom comparator: `nodes` in parts-map-app.tsx rebuilds
+ *  a fresh `data` object for every part on every render (any single-field
+ *  edit, or a drag-follow-camera frame during someone else's drag), so the
+ *  default shallow-prop compare would never bail — `data`'s wrapper object
+ *  is always a new reference even when its contents didn't change. This
+ *  compares the contents instead: `data.part` keeps its reference for any
+ *  part `setParts` didn't touch (every mutation in this app is a `.map()`
+ *  that only spreads the matching id), so an unrelated card's edit no
+ *  longer forces every other card to reconcile on a crowded map. */
+export const PartNode = memo(function PartNode({
   id,
   data,
   selected,
@@ -142,4 +151,13 @@ export function PartNode({
       </NodeToolbar>
     </div>
   );
-}
+},
+(prev, next) =>
+  prev.id === next.id &&
+  prev.selected === next.selected &&
+  prev.dragging === next.dragging &&
+  prev.data.part === next.data.part &&
+  prev.data.lifted === next.data.lifted &&
+  prev.data.popKey === next.data.popKey &&
+  prev.data.revealKey === next.data.revealKey,
+);
