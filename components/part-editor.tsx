@@ -13,6 +13,7 @@ import { locationDisplay, partSurface, FONT_SIZE_LABELS } from "@/lib/part-utils
 import { panelStyle } from "@/lib/ui";
 import { useAppApi, usePartsList } from "@/hooks/use-app-api";
 import { LocationPicker } from "@/components/location-picker";
+import { BottomSheet } from "@/components/bottom-sheet";
 
 /** A draft field (name/note/location) registers its own commit callback
  *  here while mounted, keyed by a stable id. The phone sheet stays
@@ -394,8 +395,6 @@ export function MobileEditSheet({
   const [lastPart, setLastPart] = useState<Part | null>(null);
   if (part && part !== lastPart) setLastPart(part);
   const p = part ?? lastPart;
-  const sheetRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ y0: number; dy: number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Which part id (if any) has a pending delete confirmation — comparing
   // against the current part rather than a plain boolean means switching
@@ -445,68 +444,17 @@ export function MobileEditSheet({
     color: active ? "#fff" : "var(--ink-soft)",
   });
 
-  // Swipe-to-dismiss: the grab strip follows the finger (down only);
-  // past the threshold the sheet is put away, otherwise it springs home.
-  const onGrabDown = (e: React.PointerEvent) => {
-    dragRef.current = { y0: e.clientY, dy: 0 };
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    if (sheetRef.current) sheetRef.current.style.transition = "none";
-  };
-  const onGrabMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    d.dy = Math.max(0, e.clientY - d.y0);
-    if (sheetRef.current) {
-      sheetRef.current.style.transform = `translateY(${d.dy}px)`;
-    }
-  };
-  const onGrabUp = () => {
-    const d = dragRef.current;
-    dragRef.current = null;
-    const s = sheetRef.current;
-    if (!s) return;
-    s.style.transition = "";
-    s.style.transform = "";
-    if (d && d.dy > 80) {
-      flushPending();
-      onClose();
-    }
-  };
-
   return (
-    <div
-      ref={sheetRef}
-      data-ui-chrome
-      className="absolute inset-x-0 bottom-0 z-30 flex flex-col rounded-t-3xl px-4 sm:hidden"
-      style={{
-        ...panelStyle,
-        boxShadow: "0 -8px 32px rgba(60, 50, 40, 0.16)",
-        paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-        // Cap the height and let the fields scroll: on iOS the software
-        // keyboard overlays without resizing the layout viewport, so an
-        // uncapped bottom-anchored sheet leaves lower fields (note, surface
-        // toggle) stranded behind the keyboard with no way to scroll to them.
-        maxHeight: "85dvh",
-        transform: open ? "translateY(0)" : "translateY(112%)",
-        transition: "transform 320ms cubic-bezier(0.32, 0.72, 0.22, 1)",
-        touchAction: "manipulation",
-        pointerEvents: open ? "auto" : "none",
-      }}
+    // 85dvh (vs the list sheet's 62dvh) leaves room for the fields to
+    // scroll above the iOS keyboard, which overlays without resizing the
+    // layout viewport. onBeforeClose flushes pending edits on a swipe-away.
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      onBeforeClose={flushPending}
+      maxHeight="85dvh"
+      label="Edit part"
     >
-      {/* grab strip — the whole top edge is the swipe handle */}
-      <div
-        className="-mx-4 flex shrink-0 cursor-grab justify-center pb-1 pt-2"
-        style={{ touchAction: "none" }}
-        onPointerDown={onGrabDown}
-        onPointerMove={onGrabMove}
-        onPointerUp={onGrabUp}
-        onPointerCancel={onGrabUp}
-      >
-        <div
-          className="h-1.5 w-10 rounded-full"
-          style={{ background: "var(--line)" }}
-        />
-      </div>
       <CommitRegistryContext.Provider value={registry}>
         <div className="flex-1 overflow-y-auto overscroll-contain">
         {pickerOpen ? (
@@ -687,6 +635,6 @@ export function MobileEditSheet({
         )}
         </div>
       </CommitRegistryContext.Provider>
-    </div>
+    </BottomSheet>
   );
 }

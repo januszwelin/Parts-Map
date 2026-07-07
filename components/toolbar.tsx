@@ -93,8 +93,6 @@ export function Toolbar(props: {
   onUndo: () => void;
   onRedo: () => void;
 }) {
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [bodyOpen, setBodyOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -126,16 +124,14 @@ export function Toolbar(props: {
     props.onNameChange("");
   };
   const closePopovers = () => {
-    setSheetOpen(false);
-    setBodyOpen(false);
     setAccountOpen(false);
     setConfirmDelete(false);
     setDeleteError(null);
   };
-  // These popovers previously only closed via the click-outside catcher
-  // below — unusable by keyboard/switch users, since nothing else was
-  // reachable to dismiss them.
-  const anyPopoverOpen = sheetOpen || bodyOpen || accountOpen;
+  // The account popover previously only closed via the click-outside
+  // catcher below — unusable by keyboard/switch users, since nothing else
+  // was reachable to dismiss it.
+  const anyPopoverOpen = accountOpen;
   useEffect(() => {
     if (!anyPopoverOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -175,16 +171,18 @@ export function Toolbar(props: {
   );
 
   return (
-    // Bottom-anchored thumb bar on phones; classic top bar from sm up.
+    // Classic top bar — desktop / wide layouts only. Phones get the
+    // Miro-style top bar + bottom quick-tools pill + sheets instead
+    // (rendered separately in parts-map-app), so this is `hidden sm:flex`.
     <div
       data-ui-chrome
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] sm:bottom-auto sm:top-0 sm:p-3"
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 hidden justify-center p-3 sm:flex"
     >
       <div
-        className="pointer-events-auto relative flex w-full max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-2xl px-2.5 py-2 sm:w-auto sm:px-3"
+        className="pointer-events-auto relative flex w-auto max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-2xl px-3 py-2"
         style={{ ...panelStyle, touchAction: "manipulation" }}
       >
-        {(sheetOpen || bodyOpen || accountOpen) && (
+        {accountOpen && (
           <div className="fixed inset-0" onClick={closePopovers} />
         )}
 
@@ -325,11 +323,7 @@ export function Toolbar(props: {
               aria-label="Account"
               className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium text-white"
               style={{ background: "var(--accent)" }}
-              onClick={() => {
-                setSheetOpen(false);
-                setBodyOpen(false);
-                setAccountOpen((v) => !v);
-              }}
+              onClick={() => setAccountOpen((v) => !v)}
             >
               {(session.user.name || session.user.email || "?")
                 .trim()
@@ -439,194 +433,6 @@ export function Toolbar(props: {
           </a>
         )}
 
-        {/* ——— phone: body pill + overflow sheet ——— */}
-        <button
-          className={`${btn} shrink-0 sm:hidden`}
-          style={{ color: "var(--ink-soft)" }}
-          aria-label="Body size"
-          onClick={() => {
-            setSheetOpen(false);
-            setBodyOpen((v) => !v);
-          }}
-        >
-          body
-        </button>
-        <button
-          className={`${btn} shrink-0 sm:hidden`}
-          style={{ color: "var(--ink-soft)" }}
-          aria-label="More actions"
-          onClick={() => {
-            setBodyOpen(false);
-            setSheetOpen((v) => !v);
-          }}
-        >
-          ⋯
-        </button>
-
-        {bodyOpen && (
-          <div
-            className="fade-in absolute bottom-full left-1/2 mb-2 flex w-[min(320px,88vw)] -translate-x-1/2 flex-col gap-2.5 rounded-2xl px-4 py-3 sm:hidden"
-            style={{ ...panelStyle, touchAction: "manipulation" }}
-          >
-            <div className="flex items-center gap-3">{sliderAndAuto}</div>
-          </div>
-        )}
-        {sheetOpen && (
-          <div
-            className={`fade-in absolute bottom-full right-0 mb-2 flex flex-col rounded-2xl p-1.5 sm:hidden ${
-              confirmDelete ? "w-56" : "w-36"
-            }`}
-            style={{ ...panelStyle, touchAction: "manipulation" }}
-          >
-            <button
-              className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-              style={{ color: "var(--ink-soft)" }}
-              onClick={() => {
-                setSheetOpen(false);
-                props.onImportOpen();
-              }}
-            >
-              Import
-            </button>
-            <button
-              className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-              style={{ color: "var(--ink-soft)" }}
-              onClick={() => {
-                setSheetOpen(false);
-                props.onSave();
-              }}
-            >
-              Save
-            </button>
-            <button
-              className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-              style={{ color: "var(--ink-soft)" }}
-              onClick={() => {
-                setSheetOpen(false);
-                fileRef.current?.click();
-              }}
-            >
-              Load
-            </button>
-            <button
-              className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-              style={{ color: "var(--ink-soft)" }}
-              aria-pressed={props.soundOn}
-              onClick={props.onToggleSound}
-            >
-              <SoundIcon on={props.soundOn} />
-              {props.soundOn ? "Sound on" : "Sound off"}
-            </button>
-            <button
-              className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-              style={{ color: "var(--ink-soft)" }}
-              onClick={() => {
-                setSheetOpen(false);
-                props.onShowWelcome();
-              }}
-            >
-              Welcome & tour
-            </button>
-            <label
-              className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-xs hover:bg-black/5"
-              style={{ color: "var(--ink-soft)" }}
-            >
-              <input
-                type="checkbox"
-                checked={props.draftEnabled}
-                onChange={(e) => props.onToggleDraft(e.target.checked)}
-                className="accent-[var(--accent)]"
-              />
-              Keep a local draft
-            </label>
-            <div className="my-1 h-px" style={{ background: "var(--line)" }} />
-            {session ? (
-              <>
-                <button
-                  className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-                  style={{ color: "var(--ink-soft)" }}
-                  onClick={() => {
-                    setSheetOpen(false);
-                    props.onOpenMyMaps();
-                  }}
-                >
-                  My maps
-                </button>
-                <button
-                  className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-                  style={{ color: "var(--ink-soft)" }}
-                  onClick={() => {
-                    setSheetOpen(false);
-                    props.onSaveToCloud();
-                  }}
-                >
-                  Save to cloud
-                </button>
-                <button
-                  className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-                  style={{ color: "var(--ink-soft)" }}
-                  onClick={() => {
-                    setSheetOpen(false);
-                    authClient.signOut();
-                  }}
-                >
-                  Sign out
-                </button>
-                <div className="my-1 h-px" style={{ background: "var(--line)" }} />
-                {confirmDelete ? (
-                  <div className="px-2 py-1.5">
-                    <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
-                      Delete your account and all cloud maps?
-                    </p>
-                    {deleteError && (
-                      <p className="pb-1.5 text-[11px]" style={{ color: "var(--danger)" }}>
-                        {deleteError}
-                      </p>
-                    )}
-                    <div className="flex gap-1.5">
-                      <button
-                        className="flex-1 rounded-md px-2 py-1.5 text-[11px] disabled:opacity-60"
-                        style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
-                        disabled={deleting}
-                        onClick={deleteAccount}
-                      >
-                        {deleting ? "Deleting…" : "Delete"}
-                      </button>
-                      <button
-                        className="flex-1 rounded-md px-2 py-1.5 text-[11px]"
-                        style={{ color: "var(--ink-soft)" }}
-                        disabled={deleting}
-                        onClick={() => {
-                          setConfirmDelete(false);
-                          setDeleteError(null);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    className="rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-                    style={{ color: "var(--danger)" }}
-                    onClick={() => setConfirmDelete(true)}
-                  >
-                    Delete account
-                  </button>
-                )}
-              </>
-            ) : (
-              <a
-                href="/sign-in"
-                className="block rounded-lg px-3 py-2.5 text-left text-xs hover:bg-black/5"
-                style={{ color: "var(--ink-soft)" }}
-              >
-                Sign in
-              </a>
-            )}
-          </div>
-        )}
-
         <input
           ref={fileRef}
           type="file"
@@ -653,7 +459,7 @@ export function FrameMapButton({ onFrame }: { onFrame: () => void }) {
       data-tour="frame"
       aria-label="Frame the map"
       title="Frame the map"
-      className="absolute bottom-[calc(76px+env(safe-area-inset-bottom))] right-3 z-20 flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:bottom-10"
+      className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3 z-20 flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:bottom-10"
       style={{ ...panelStyle, touchAction: "manipulation" }}
       onClick={onFrame}
     >

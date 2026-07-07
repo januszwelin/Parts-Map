@@ -42,8 +42,11 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: "add",
     anchor: () => "add",
+    // Layout-neutral: the anchor is the Add button on desktop and the +
+    // button on phone (both carry data-tour="add"); phone reveals a name
+    // field in the Create sheet first.
     text: () =>
-      "Name a part, then press Add — a ghost card follows your finger until you tap where it lives.",
+      "Add a part — a ghost card then follows your finger until you tap where it lives.",
     done: (s, b) => s.partsCount > b.partsCount,
   },
   {

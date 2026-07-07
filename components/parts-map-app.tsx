@@ -122,6 +122,9 @@ import {
 } from "@/components/lift-overlay";
 import { Toolbar, FrameMapButton } from "@/components/toolbar";
 import { PartsListPanel, PhonePartsSheet } from "@/components/parts-list";
+import { PhoneTopBar } from "@/components/phone-top-bar";
+import { PhoneQuickTools } from "@/components/phone-quick-tools";
+import { CreateSheet, ShareSheet, MoreSheet } from "@/components/phone-sheets";
 import { ImportModal } from "@/components/import-modal";
 import { WelcomeModal } from "@/components/welcome";
 import { MyMapsModal } from "@/components/my-maps";
@@ -198,6 +201,18 @@ function PartsMapApp() {
   const [liftTarget, setLiftTarget] = useState<LiftTarget | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  /** The current map's name, shown in the phone top bar. Set when a cloud
+   *  map is opened / saved and when a file is loaded; "Untitled map" until
+   *  then. Display-only — rename still lives in My Maps. */
+  const [mapTitle, setMapTitle] = useState("Untitled map");
+  /** Which phone bottom sheet is open (create / share / more), or none.
+   *  One at a time, and never over the edit sheet or a drag/placement. */
+  const [phoneSheet, setPhoneSheet] = useState<
+    "create" | "share" | "more" | null
+  >(null);
+  /** Set when the list sheet is opened via the top-bar search, so it can
+   *  focus its filter; cleared when the list closes. */
+  const [listSearchFocus, setListSearchFocus] = useState(false);
   /** Tap-to-place: pressing Add births the part into a brief placement
    *  mode — a ghost card follows the hand, the anchor constellation
    *  steps forward, and one tap gives the part its home. The part is
@@ -1391,6 +1406,9 @@ function PartsMapApp() {
       }
       sndPlay("lift");
       haptic(6);
+      // A drag takes over the stage: close any open phone sheet so it
+      // can't cover the landing or resurface when the drag ends.
+      setPhoneSheet(null);
       setLift({ id: node.id, isTouch });
       setSelectedEdgeId(null);
       startLiftLoop();
@@ -1594,8 +1612,12 @@ function PartsMapApp() {
         if (ch.selected) {
           maybeShowLinkHint();
           // One sheet at a time on phones: selecting a card summons the
-          // edit sheet, so the list sheet steps aside first.
-          if (isPhoneRef.current) setListOpen(false);
+          // edit sheet, so the list and any create/share/more sheet step
+          // aside first.
+          if (isPhoneRef.current) {
+            setListOpen(false);
+            setPhoneSheet(null);
+          }
         }
       } else if (ch.type === "remove") {
         const nm = partsRef.current.find((p) => p.id === ch.id)?.name;
@@ -1859,6 +1881,9 @@ function PartsMapApp() {
       color: PALETTE[colorCountRef.current % PALETTE.length],
     };
     placingRef.current = info;
+    // Put any phone sheet away so the ghost + landing are never covered,
+    // and so a stale sheet can't resurface when placement ends.
+    setPhoneSheet(null);
     setPlacing(info);
     setPlacingTouch(false);
     sndPlay("lift");
@@ -2246,6 +2271,7 @@ function PartsMapApp() {
         const title = `Parts Map – ${new Date().toISOString().slice(0, 10)}`;
         const created = await createMap(title, doc);
         cloudDocRef.current = { id: created.id, title: created.title };
+        setMapTitle(created.title);
       }
       dirtyRef.current = false;
       setSaveStatus("saved");
@@ -2266,6 +2292,7 @@ function PartsMapApp() {
     (id: string, title: string, doc: MapDoc) => {
       applyLoadedDoc(doc);
       cloudDocRef.current = { id, title };
+      setMapTitle(title);
       setNotice({ text: `Opened “${title}”`, key: Date.now() });
     },
     [applyLoadedDoc],
@@ -2278,6 +2305,7 @@ function PartsMapApp() {
         applyLoadedDoc(doc);
         // A file load replaces whatever cloud map was open, if any.
         cloudDocRef.current = null;
+        setMapTitle(file.name.replace(/\.json$/i, "").trim() || "Untitled map");
       } catch (e) {
         // Two different failures used to show the same message: the file
         // genuinely couldn't be read (a mobile file picker can hand back an
@@ -2293,6 +2321,24 @@ function PartsMapApp() {
       }
     },
     [applyLoadedDoc],
+  );
+
+  /** Phone top-bar home / title: signed-in people go to their maps,
+   *  signed-out people to sign-in (where cloud maps live). */
+  const goHome = useCallback(() => {
+    if (session) setMyMapsOpen(true);
+    else window.location.href = "/sign-in";
+  }, [session]);
+
+  /** Open one phone sheet, closing the list and any card selection first
+   *  (one sheet at a time). */
+  const openPhoneSheet = useCallback(
+    (which: "create" | "share" | "more") => {
+      setSelectedId(null);
+      setListOpen(false);
+      setPhoneSheet(which);
+    },
+    [],
   );
 
   const onBodyScaleManual = useCallback((v: number) => {
@@ -2746,10 +2792,11 @@ function PartsMapApp() {
         </ReactFlow>
 
         {/* Phone-only Front/Back jump: glides the camera between the two
-            figures (framing is per-figure on narrow screens). */}
+            figures (framing is per-figure on narrow screens). Sits just
+            below the top bar so the two don't share a row. */}
         <div
           data-ui-chrome
-          className="absolute left-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-20 flex -translate-x-1/2 gap-0.5 rounded-full p-1 sm:hidden"
+          className="absolute left-1/2 top-[calc(4rem+env(safe-area-inset-top))] z-20 flex -translate-x-1/2 gap-0.5 rounded-full p-1 sm:hidden"
           style={{ ...panelStyle, touchAction: "manipulation" }}
         >
           {(["front", "back"] as const).map((d) => (
@@ -2800,6 +2847,37 @@ function PartsMapApp() {
           onUndo={undo}
           onRedo={redo}
         />
+        {/* ——— Phone chrome (Miro-style): top identity/nav bar + bottom
+            quick-tools pill. Both `sm:hidden`; desktop keeps the Toolbar
+            above. ——— */}
+        <PhoneTopBar
+          mapTitle={mapTitle}
+          onHome={goHome}
+          onTitle={goHome}
+          onSearch={() => {
+            setSelectedId(null);
+            setPhoneSheet(null);
+            setListSearchFocus(true);
+            setListOpen(true);
+          }}
+          onShare={() => openPhoneSheet("share")}
+          onMore={() => openPhoneSheet("more")}
+        />
+        <PhoneQuickTools
+          canUndo={canUndo}
+          canRedo={canRedo}
+          undoLabel={undoLabel}
+          redoLabel={redoLabel}
+          onUndo={undo}
+          onRedo={redo}
+          listOpen={listOpen}
+          onToggleList={() => {
+            setPhoneSheet(null);
+            setListSearchFocus(false);
+            setListOpen((v) => !v);
+          }}
+          onAdd={() => openPhoneSheet("create")}
+        />
         <FrameMapButton
           onFrame={() => {
             fitAll();
@@ -2814,8 +2892,12 @@ function PartsMapApp() {
             arrows={arrows}
             bodyScale={bodyScale}
             open={listOpen && !lift && !placing}
+            autoFocusSearch={listSearchFocus}
             onReveal={revealPart}
-            onClose={() => setListOpen(false)}
+            onClose={() => {
+              setListOpen(false);
+              setListSearchFocus(false);
+            }}
             onExportMenuOpenChange={setExportMenuOpen}
             onNotice={(text) => setNotice({ text, key: Date.now() })}
           />
@@ -2845,6 +2927,56 @@ function PartsMapApp() {
             !placing
           }
           onClose={() => setSelectedId(null)}
+        />
+        {/* Phone create / share / more sheets (Miro-style). Gated off during
+            a drag/placement so they never cover a landing. */}
+        <CreateSheet
+          open={phoneSheet === "create" && !lift && !placing}
+          onClose={() => setPhoneSheet(null)}
+          nameValue={draft}
+          onNameChange={setDraft}
+          onAdd={(name) => {
+            setPhoneSheet(null);
+            beginPlacing(name);
+            setDraft("");
+          }}
+          onImport={() => {
+            setPhoneSheet(null);
+            setImportOpen(true);
+          }}
+          onLoadSample={() => {
+            setPhoneSheet(null);
+            applyLoadedDoc(sampleMap());
+            setMapTitle("Sample map");
+          }}
+        />
+        <ShareSheet
+          open={phoneSheet === "share" && !lift && !placing}
+          onClose={() => setPhoneSheet(null)}
+          parts={parts}
+          arrows={arrows}
+          bodyScale={bodyScale}
+          onSaveToCloud={saveToCloud}
+          onSaveFile={onSave}
+          onLoadFile={onLoad}
+          onOpenMyMaps={() => setMyMapsOpen(true)}
+          onNotice={(text) => setNotice({ text, key: Date.now() })}
+        />
+        <MoreSheet
+          open={phoneSheet === "more" && !lift && !placing}
+          onClose={() => setPhoneSheet(null)}
+          bodyScale={bodyScale}
+          onBodyScale={onBodyScaleManual}
+          autoScale={autoScale}
+          onAutoScale={(v) => {
+            setAutoScale(v);
+            markDirty();
+          }}
+          soundOn={soundOn}
+          onToggleSound={() => setSoundOn((v) => !v)}
+          draftEnabled={draftEnabled}
+          onToggleDraft={toggleDraft}
+          onShowWelcome={reopenWelcome}
         />
         {/* Quiet notice pill: what just happened, sometimes one action. */}
         {notice && (
@@ -2897,9 +3029,11 @@ function PartsMapApp() {
           onOpenMap={onOpenCloudMap}
         />
         {parts.length === 0 && !placing && (
-          <div className="fade-in pointer-events-none absolute inset-x-0 top-16 z-10 flex justify-center sm:top-20">
+          <div className="fade-in pointer-events-none absolute inset-x-0 top-28 z-10 flex justify-center px-6 text-center sm:top-20">
             <p className="text-xs" style={{ color: "var(--ink-faint)" }}>
-              Name a part to begin — then tap where it lives.
+              {isPhone
+                ? "Tap + to add your first part — then tap where it lives."
+                : "Name a part to begin — then tap where it lives."}
             </p>
           </div>
         )}
@@ -2963,6 +3097,7 @@ function PartsMapApp() {
           onStartTour={startTour}
           onExplore={() => {
             applyLoadedDoc(sampleMap());
+            setMapTitle("Sample map");
             closeWelcome();
           }}
         />

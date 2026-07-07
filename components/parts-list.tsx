@@ -17,6 +17,7 @@ import {
 } from "@/lib/exports";
 import { useReducedMotion } from "@/hooks/use-media";
 import { LocationField } from "@/components/part-editor";
+import { BottomSheet } from "@/components/bottom-sheet";
 
 /** The list filter's state — only offered once the list is long enough to
  *  need it; clears itself whenever the list is put away. */
@@ -441,6 +442,7 @@ export function PhonePartsSheet({
   arrows,
   bodyScale,
   open,
+  autoFocusSearch,
   onReveal,
   onClose,
   onExportMenuOpenChange,
@@ -450,6 +452,9 @@ export function PhonePartsSheet({
   arrows: Arrow[];
   bodyScale: number;
   open: boolean;
+  /** Focus the filter as the sheet arrives — set when opened via the
+   *  top-bar search rather than the list button. */
+  autoFocusSearch?: boolean;
   onReveal: (id: string) => void;
   onClose: () => void;
   /** The tour's hook into the "⋯" menu opening — optional. */
@@ -457,64 +462,16 @@ export function PhonePartsSheet({
   onNotice?: (text: string) => void;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
-  const sheetRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ y0: number; dy: number } | null>(null);
-
-  // Swipe-to-dismiss — same gesture as MobileEditSheet: the strip follows
-  // the finger (down only); past the threshold the sheet is put away.
-  const onGrabDown = (e: React.PointerEvent) => {
-    dragRef.current = { y0: e.clientY, dy: 0 };
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    if (sheetRef.current) sheetRef.current.style.transition = "none";
-  };
-  const onGrabMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    d.dy = Math.max(0, e.clientY - d.y0);
-    if (sheetRef.current) {
-      sheetRef.current.style.transform = `translateY(${d.dy}px)`;
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (open && autoFocusSearch) {
+      const t = setTimeout(() => searchRef.current?.focus(), 120);
+      return () => clearTimeout(t);
     }
-  };
-  const onGrabUp = () => {
-    const d = dragRef.current;
-    dragRef.current = null;
-    const s = sheetRef.current;
-    if (!s) return;
-    s.style.transition = "";
-    s.style.transform = "";
-    if (d && d.dy > 80) onClose();
-  };
+  }, [open, autoFocusSearch]);
 
   return (
-    <div
-      ref={sheetRef}
-      data-ui-chrome
-      className="absolute inset-x-0 bottom-0 z-30 flex flex-col rounded-t-3xl px-4 sm:hidden"
-      style={{
-        ...panelStyle,
-        boxShadow: "0 -8px 32px rgba(60, 50, 40, 0.16)",
-        paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-        maxHeight: "62dvh",
-        transform: open ? "translateY(0)" : "translateY(112%)",
-        transition: "transform 320ms cubic-bezier(0.32, 0.72, 0.22, 1)",
-        touchAction: "manipulation",
-        pointerEvents: open ? "auto" : "none",
-      }}
-    >
-      {/* grab strip — the whole top edge is the swipe handle */}
-      <div
-        className="-mx-4 flex shrink-0 cursor-grab justify-center pb-1 pt-2"
-        style={{ touchAction: "none" }}
-        onPointerDown={onGrabDown}
-        onPointerMove={onGrabMove}
-        onPointerUp={onGrabUp}
-        onPointerCancel={onGrabUp}
-      >
-        <div
-          className="h-1.5 w-10 rounded-full"
-          style={{ background: "var(--line)" }}
-        />
-      </div>
+    <BottomSheet open={open} onClose={onClose} label={`Parts (${parts.length})`}>
       <div className="flex shrink-0 items-center justify-between pb-2">
         <span className="text-sm font-medium" style={{ color: "var(--ink-soft)" }}>
           Parts ({parts.length})
@@ -541,6 +498,7 @@ export function PhonePartsSheet({
       {parts.length > 8 && (
         <div className="shrink-0 pb-2">
           <input
+            ref={searchRef}
             className="w-full rounded-lg px-3 py-2 text-sm outline-none"
             style={{
               background: "rgba(255,255,255,0.7)",
@@ -557,7 +515,7 @@ export function PhonePartsSheet({
       <div className="-mx-1.5 flex-1 overflow-y-auto overscroll-contain">
         {parts.length === 0 && (
           <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
-            No parts yet. Name one below, or Import a list.
+            No parts yet. Tap + to add one, or Import a list.
           </p>
         )}
         {parts.length > 0 && shown.length === 0 && (
@@ -578,6 +536,6 @@ export function PhonePartsSheet({
           />
         ))}
       </div>
-    </div>
+    </BottomSheet>
   );
 }
