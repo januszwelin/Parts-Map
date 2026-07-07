@@ -132,6 +132,13 @@ export function CoachMarks({
 
   if (!def) return null;
 
+  // Clamp against the *visible* viewport, not the layout viewport: on iOS
+  // Safari window.innerWidth/innerHeight span the area behind the toolbar,
+  // so a callout clamped to them can land under Safari's bars. visualViewport
+  // is the actually-visible box (falls back to window on older browsers).
+  const vv = typeof window !== "undefined" ? window.visualViewport : null;
+  const winW = vv?.width ?? (typeof window !== "undefined" ? window.innerWidth : 0);
+  const winH = vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 0);
   // The anchor sits in the screen's bottom half (phone toolbar, frame-map
   // button, …) → put the callout above it, arrow pointing down at it.
   // Otherwise the callout goes below the anchor, arrow pointing up.
@@ -139,14 +146,14 @@ export function CoachMarks({
     !!anchorKey && ALWAYS_ABOVE.has(anchorKey)
       ? true
       : rect
-        ? rect.top >= window.innerHeight / 2
+        ? rect.top >= winH / 2
         : false;
   const style: CSSProperties = rect
     ? {
         position: "fixed",
         left: Math.min(
           Math.max(rect.left + rect.width / 2, 130),
-          window.innerWidth - 130,
+          winW - 130,
         ),
         top: calloutAbove ? rect.top - 10 : rect.bottom + 10,
         transform: calloutAbove

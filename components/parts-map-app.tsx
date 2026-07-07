@@ -501,11 +501,17 @@ function PartsMapApp() {
   /** Ghost card element (screen-space) — transform written per frame. */
   const ghostRef = useRef<HTMLDivElement | null>(null);
 
+  /** True once the user (or a loaded map) has taken the camera — after that
+   *  we never auto-re-frame out from under them. Flipped by pane pan/zoom
+   *  (onMoveStart with a real event), grabbing a part, placement, any glide,
+   *  and map load; programmatic setViewport (our own framing) never flips it. */
+  const userAdjustedRef = useRef(false);
+
   /* ——— initial camera: fit both figures side by side; on a phone-width
          screen that leaves two tiny figures in dead margin, so frame the
          FRONT figure comfortably instead — the Front/Back pill (and
          pinch) reach the other one. ——— */
-  useEffect(() => {
+  const frameInitial = useCallback(() => {
     const el = wrapperRef.current;
     if (!el) return;
     const w = el.clientWidth;
@@ -523,6 +529,57 @@ function PartsMapApp() {
     }
   }, [rf]);
 
+  /* Frame once on mount, then RE-frame whenever the visible viewport settles
+     or the device rotates — but only while the user hasn't taken the camera.
+     iOS Safari's toolbar collapses/expands *after* mount, changing the h-dvh
+     container height, so a one-shot frame lands the figure off-center there;
+     Android resolves the height stably at first paint, so on Android this
+     fires once at mount and every later call is a harmless no-op. */
+  useEffect(() => {
+    frameInitial();
+    let raf = 0;
+    const refit = () => {
+      cancelAnimationFrame(raf);
+      // Coalesce the iOS toolbar-animation resize storm into one re-frame.
+      raf = requestAnimationFrame(() => {
+        if (!userAdjustedRef.current) frameInitial();
+      });
+    };
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", refit);
+    window.addEventListener("orientationchange", refit);
+    // Fallback for browsers without visualViewport.
+    if (!vv) window.addEventListener("resize", refit);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv?.removeEventListener("resize", refit);
+      window.removeEventListener("orientationchange", refit);
+      if (!vv) window.removeEventListener("resize", refit);
+    };
+  }, [frameInitial]);
+
+  /* iOS-only: while a drag or placement owns the canvas, block Safari's
+     page-level pinch (gesturestart/gesturechange) — a stray second finger
+     would otherwise zoom the *page*, shifting visualViewport and poisoning
+     every screen→flow conversion until it resets. Scoped to active
+     interactions so idle page pinch-zoom (a deliberate WCAG 1.4.4 affordance,
+     see app/layout.tsx) stays available. WebKit-only events, feature-gated;
+     non-passive so preventDefault takes. */
+  useEffect(() => {
+    if (!("ongesturestart" in window)) return;
+    const el = wrapperRef.current;
+    if (!el) return;
+    const block = (e: Event) => {
+      if (liftInfoRef.current || placingRef.current) e.preventDefault();
+    };
+    el.addEventListener("gesturestart", block, { passive: false });
+    el.addEventListener("gesturechange", block, { passive: false });
+    return () => {
+      el.removeEventListener("gesturestart", block);
+      el.removeEventListener("gesturechange", block);
+    };
+  }, []);
+
   /* ——— phone Front/Back pill: which figure owns the screen center, and
          a gentle x-glide to the other one (zoom untouched — the pill
          moves the camera, it is not a mode). ——— */
@@ -533,6 +590,9 @@ function PartsMapApp() {
    *  fresh grab) takes the camera over. */
   const glideViewport = useCallback(
     (to: Viewport, D = 380) => {
+      // Any glide (Front/Back pill, list reveal, frame-map) is the user
+      // steering the camera — stand the auto-re-frame down.
+      userAdjustedRef.current = true;
       cancelAnimationFrame(glideRafRef.current);
       if (
         window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
@@ -563,6 +623,12 @@ function PartsMapApp() {
     const cx = (el.clientWidth / 2 - vp.x) / (vp.zoom || 1);
     // The figures' midline is flow x = 0 at every body scale.
     setViewSide(cx > 0 ? "back" : "front");
+  }, []);
+  /* A real source event means the user grabbed the canvas (pan/pinch/zoom) —
+     programmatic setViewport (our framing/glides) passes null. Once they've
+     taken the camera, the auto-re-frame stands down. */
+  const onMoveStart = useCallback((e: unknown) => {
+    if (e) userAdjustedRef.current = true;
   }, []);
   const jumpToFigure = useCallback(
     (depth: Depth) => {
@@ -1200,6 +1266,9 @@ function PartsMapApp() {
   const onNodeDragStart = useCallback(
     (e: MouseEvent | TouchEvent, node: Node) => {
       cancelSettle();
+      // Grabbing a part is engaging with the map — the follow-camera will
+      // move the viewport, so the auto-re-frame must not fire under it.
+      userAdjustedRef.current = true;
       // Own the override from frame one — a regrab mid-settle must not
       // flash at the derived position while the loop spins up.
       setDragOverride({ id: node.id, pos: { ...node.position } });
@@ -1885,6 +1954,18 @@ function PartsMapApp() {
     if (!placing) return;
     const el = wrapperRef.current;
     if (!el) return;
+    // Aiming a ghost at the figure — a viewport re-frame mid-aim would move
+    // the target under the pointer, so the auto-re-frame stands down.
+    userAdjustedRef.current = true;
+    // Own the touch for the duration of placement: without touch-action:none
+    // on the element actually under the finger (the pane), iOS Safari can
+    // reclassify the tap as a page pan/zoom and fire pointercancel before the
+    // tap ever reaches onUp — so nothing lands. Restored on teardown.
+    const pane = el.querySelector<HTMLElement>(".react-flow__pane");
+    const prevWrapTA = el.style.touchAction;
+    const prevPaneTA = pane?.style.touchAction ?? "";
+    el.style.touchAction = "none";
+    if (pane) pane.style.touchAction = "none";
     let pt: XYPosition | null = null;
     let lastKey = "";
     let seeded = false;
@@ -1909,6 +1990,14 @@ function PartsMapApp() {
       e.stopPropagation();
       placePart({ x: e.clientX, y: e.clientY });
     };
+    const onCancel = () => {
+      // iOS can still cancel a touch mid-press if it decides it's a gesture.
+      // Keep placement mode alive and re-arm for a fresh contact rather than
+      // committing at a stale point or silently dropping the mode.
+      pt = null;
+      seeded = false;
+      setPlacingTouch(false);
+    };
     const onClick = (e: MouseEvent) => {
       if (isChrome(e.target)) return;
       e.stopPropagation();
@@ -1920,6 +2009,7 @@ function PartsMapApp() {
     el.addEventListener("pointermove", onMove, true);
     el.addEventListener("pointerdown", onDown, true);
     el.addEventListener("pointerup", onUp, true);
+    el.addEventListener("pointercancel", onCancel, true);
     el.addEventListener("click", onClick, true);
     window.addEventListener("keydown", onKey);
     let raf = 0;
@@ -1995,8 +2085,11 @@ function PartsMapApp() {
       el.removeEventListener("pointermove", onMove, true);
       el.removeEventListener("pointerdown", onDown, true);
       el.removeEventListener("pointerup", onUp, true);
+      el.removeEventListener("pointercancel", onCancel, true);
       el.removeEventListener("click", onClick, true);
       window.removeEventListener("keydown", onKey);
+      el.style.touchAction = prevWrapTA;
+      if (pane) pane.style.touchAction = prevPaneTA;
       setLiftTarget(null);
     };
   }, [placing, rf, placePart, cancelPlacing]);
@@ -2095,6 +2188,9 @@ function PartsMapApp() {
       setAutoScale(doc.autoScale);
       setSelectedId(null);
       setSelectedEdgeId(null);
+      // A loaded map owns its own camera (saved viewport, or wherever it
+      // currently sits) — the initial auto-re-frame must not override it.
+      userAdjustedRef.current = true;
       if (doc.viewport) rf.setViewport(doc.viewport);
       // A fresh document: yesterday's history belongs to the old map.
       historyRef.current = [];
@@ -2575,6 +2671,7 @@ function PartsMapApp() {
           onNodeDragStart={onNodeDragStart}
           onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
+          onMoveStart={onMoveStart}
           onMove={onMove}
           onPaneClick={() => {
             setSelectedId(null);

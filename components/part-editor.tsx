@@ -477,11 +477,16 @@ export function MobileEditSheet({
     <div
       ref={sheetRef}
       data-ui-chrome
-      className="absolute inset-x-0 bottom-0 z-30 rounded-t-3xl px-4 sm:hidden"
+      className="absolute inset-x-0 bottom-0 z-30 flex flex-col rounded-t-3xl px-4 sm:hidden"
       style={{
         ...panelStyle,
         boxShadow: "0 -8px 32px rgba(60, 50, 40, 0.16)",
         paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+        // Cap the height and let the fields scroll: on iOS the software
+        // keyboard overlays without resizing the layout viewport, so an
+        // uncapped bottom-anchored sheet leaves lower fields (note, surface
+        // toggle) stranded behind the keyboard with no way to scroll to them.
+        maxHeight: "85dvh",
         transform: open ? "translateY(0)" : "translateY(112%)",
         transition: "transform 320ms cubic-bezier(0.32, 0.72, 0.22, 1)",
         touchAction: "manipulation",
@@ -490,7 +495,7 @@ export function MobileEditSheet({
     >
       {/* grab strip — the whole top edge is the swipe handle */}
       <div
-        className="-mx-4 flex cursor-grab justify-center pb-1 pt-2"
+        className="-mx-4 flex shrink-0 cursor-grab justify-center pb-1 pt-2"
         style={{ touchAction: "none" }}
         onPointerDown={onGrabDown}
         onPointerMove={onGrabMove}
@@ -503,6 +508,7 @@ export function MobileEditSheet({
         />
       </div>
       <CommitRegistryContext.Provider value={registry}>
+        <div className="flex-1 overflow-y-auto overscroll-contain">
         {pickerOpen ? (
           <LocationPicker part={p} onDone={() => setPickerOpen(false)} />
         ) : (
@@ -679,6 +685,7 @@ export function MobileEditSheet({
             </div>
           </>
         )}
+        </div>
       </CommitRegistryContext.Provider>
     </div>
   );

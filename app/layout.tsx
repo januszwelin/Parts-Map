@@ -34,6 +34,11 @@ export const viewport: Viewport = {
   // pinch *inside the canvas* on its own, so the page-level gesture can stay
   // available for the chrome and text without fighting the canvas.
   viewportFit: "cover",
+  // When the software keyboard opens, resize the layout viewport rather than
+  // letting it overlay the page — so bottom-anchored sheets (the phone edit
+  // sheet) stay above the keyboard instead of behind it. Honored by Chromium;
+  // a no-op on iOS Safari (which uses visualViewport), harmless there.
+  interactiveWidget: "resizes-content",
   themeColor: "#f7f5f1",
 };
 

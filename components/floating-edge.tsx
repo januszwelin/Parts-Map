@@ -142,6 +142,15 @@ export function FloatingEdge({
     // oscillate (correct, re-measure the corrected position as "fine",
     // un-correct, repeat).
     const r = el.getBoundingClientRect();
+    // Clamp against the *visible* viewport. On iOS Safari window.innerHeight
+    // spans the area behind the collapsing toolbar, so a popover clamped to it
+    // can sit under Safari's bars / off-screen; visualViewport is the actually
+    // visible box (falls back to window where it's unsupported). Offset is
+    // intentionally not applied — with body overflow hidden and no page
+    // pinch-zoom, getBoundingClientRect already shares this box's origin.
+    const vv = window.visualViewport;
+    const winW = vv?.width ?? window.innerWidth;
+    const winH = vv?.height ?? window.innerHeight;
     const left = r.left - clamp.dx;
     const right = r.right - clamp.dx;
     const top0 = r.top - clamp.dy;
@@ -150,10 +159,10 @@ export function FloatingEdge({
     let dx = 0;
     let dy = 0;
     if (left < side) dx = side - left;
-    else if (right > window.innerWidth - side) dx = window.innerWidth - side - right;
+    else if (right > winW - side) dx = winW - side - right;
     if (top0 < top) dy = top - top0;
-    else if (bottom0 > window.innerHeight - bottom) {
-      dy = window.innerHeight - bottom - bottom0;
+    else if (bottom0 > winH - bottom) {
+      dy = winH - bottom - bottom0;
     }
     setClamp((prev) => (prev.dx === dx && prev.dy === dy ? prev : { dx, dy }));
   });

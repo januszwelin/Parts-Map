@@ -225,6 +225,10 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 999px;
   opacity: 0;
   transition: opacity 140ms ease;
+  /* Own the gesture: without this, iOS Safari treats a touch that starts on
+     this custom overlay as a candidate page pan/zoom (touch-action doesn't
+     inherit from React Flow's pane), so dragging an arrow off a dot fails. */
+  touch-action: none;
 }
 .part-source-handle.react-flow__handle::after {
   content: "";
