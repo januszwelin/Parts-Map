@@ -19,7 +19,7 @@ import {
 } from "@xyflow/react";
 import { pointOnRectSide, nearestCardinalSide } from "@/lib/geometry";
 import { ARROW_INK } from "@/lib/tuning";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle, panelStyle } from "@/lib/ui";
 import { useAppApi } from "@/hooks/use-app-api";
 import { useIsCoarse, useIsPhone } from "@/hooks/use-media";
 import type { Arrow, HandleSide } from "@/lib/types";
@@ -34,7 +34,14 @@ import { useCommitOnDismiss } from "@/components/part-editor";
 const VIEWPORT_MARGIN = { top: 64, bottom: 84, side: 12 };
 
 export type FloatingEdgeType = Edge<
-  { label?: string; sourceHandle?: HandleSide },
+  {
+    label?: string;
+    sourceHandle?: HandleSide;
+    /** Exactly this arrow is selected (and no nodes) — a marquee auto-
+     *  selects every edge between caught cards, and those must not each
+     *  open a popover. */
+    solo?: boolean;
+  },
   "floating"
 >;
 
@@ -251,7 +258,7 @@ export function FloatingEdge({
       {/* The floating popover is desktop-only — on phones a selected arrow
           opens the ArrowEditSheet below (keyboard-aware, thumb-sized), and
           only the label pill renders here. */}
-      {((selected && !isPhone) || data?.label) && (
+      {((selected && data?.solo && !isPhone) || data?.label) && (
         <EdgeLabelRenderer>
           <div
             className="nopan absolute"
@@ -260,11 +267,11 @@ export function FloatingEdge({
               pointerEvents: "all",
             }}
           >
-            {selected && !isPhone ? (
+            {selected && data?.solo && !isPhone ? (
               <div
                 ref={popoverRef}
-                className="fade-in flex max-w-[min(20rem,88vw)] flex-wrap items-center justify-center gap-x-1.5 gap-y-2 rounded-2xl px-3 py-2"
-                style={panelStyle}
+                className="fade-in nowheel flex max-w-[min(20rem,88vw)] flex-wrap items-center justify-center gap-x-1.5 gap-y-2 rounded-xl px-3 py-2"
+                style={cardStyle}
               >
                 {confirmDelete ? (
                   <>

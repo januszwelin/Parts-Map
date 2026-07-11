@@ -28,6 +28,9 @@ export type PartNodeType = Node<
     revealKey: number;
     /** On-body but on the hidden surface — resting in a side lane. */
     parked: boolean;
+    /** At most one node is selected — the desktop marquee can select
+     *  several, and the edit popover must not open once per card. */
+    solo: boolean;
   },
   "part"
 >;
@@ -47,7 +50,7 @@ export const PartNode = memo(function PartNode({
   selected,
   dragging,
 }: NodeProps<PartNodeType>) {
-  const { part, lifted, popKey, revealKey, parked } = data;
+  const { part, lifted, popKey, revealKey, parked, solo } = data;
   const api = useAppApi();
   const onBackSurface = !part.offBody && partSurface(part) === "back";
   const connectionInProgress = useConnection((c) => c.inProgress);
@@ -62,12 +65,13 @@ export const PartNode = memo(function PartNode({
   // One-shot reveal halo (the list's "where is it?"), same retirement.
   const [revealPlayed, setRevealPlayed] = useState(0);
   const revealing = revealKey !== 0 && revealKey !== revealPlayed;
-  // Locked/parked cards aren't draggable, and React Flow emits nothing
-  // for a drag attempt on a non-draggable node — a silent dead gesture.
-  // A tiny pointer probe answers the tug (once per gesture) with a
-  // refusal tick + a one-line why via api.noticeBlockedDrag. Tap-select
-  // still works: nothing here stops propagation.
-  const refuse = parked || !!part.locked;
+  // Locked/parked/multi-selected cards aren't draggable, and React Flow
+  // emits nothing for a drag attempt on a non-draggable node — a silent
+  // dead gesture. A tiny pointer probe answers the tug (once per gesture)
+  // with a refusal tick + a one-line why via api.noticeBlockedDrag.
+  // Tap-select still works: nothing here stops propagation.
+  const inMulti = !!selected && !solo;
+  const refuse = parked || !!part.locked || inMulti;
   const tugRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   const refuseProbe = refuse
     ? {
@@ -79,7 +83,7 @@ export const PartNode = memo(function PartNode({
           if (!t || t.fired) return;
           if (Math.hypot(e.clientX - t.x, e.clientY - t.y) > 10) {
             t.fired = true;
-            api.noticeBlockedDrag(part.id);
+            api.noticeBlockedDrag(part.id, inMulti ? "multi" : undefined);
           }
         },
         onPointerUp: () => {
@@ -203,7 +207,9 @@ export const PartNode = memo(function PartNode({
       />
 
       <NodeToolbar
-        isVisible={!!selected && !dragging && !connectionInProgress && !isPhone}
+        isVisible={
+          !!selected && solo && !dragging && !connectionInProgress && !isPhone
+        }
         position={Position.Top}
         offset={14}
       >
@@ -220,5 +226,8 @@ export const PartNode = memo(function PartNode({
   prev.data.lifted === next.data.lifted &&
   prev.data.popKey === next.data.popKey &&
   prev.data.revealKey === next.data.revealKey &&
-  prev.data.parked === next.data.parked,
+  prev.data.parked === next.data.parked &&
+  // Only selected cards render anything solo-dependent (the toolbar), so
+  // unselected cards can skip reconciling on every selection change.
+  (prev.data.solo === next.data.solo || !next.selected),
 );

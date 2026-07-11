@@ -33,11 +33,11 @@ export type AppApi = {
   /** The drag loop writes tilt/lag transforms straight to each card's
    *  inner element; nodes register those elements here. */
   registerPartInner: (id: string, el: HTMLDivElement | null) => void;
-  /** A drag attempt on a non-draggable card (locked, or parked on the
-   *  hidden surface) — React Flow emits nothing for those, so the card
-   *  itself reports the gesture and this answers with a refusal tick and
-   *  a one-line why. */
-  noticeBlockedDrag: (id: string) => void;
+  /** A drag attempt on a non-draggable card (locked, parked on the hidden
+   *  surface, or part of a multi-selection — the marquee is select-only) —
+   *  React Flow emits nothing for those, so the card itself reports the
+   *  gesture and this answers with a refusal tick and a one-line why. */
+  noticeBlockedDrag: (id: string, reason?: "multi") => void;
 };
 
 export const AppApiContext = React.createContext<AppApi | null>(null);

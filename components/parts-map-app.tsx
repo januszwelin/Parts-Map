@@ -24,6 +24,7 @@ import {
   ViewportPortal,
   MarkerType,
   ConnectionMode,
+  SelectionMode,
   useReactFlow,
   type Node,
   type Edge,
@@ -102,7 +103,7 @@ import { haptic, hapticTick } from "@/lib/haptics";
 import { getWelcomeSeen, setWelcomeSeen } from "@/lib/onboarding";
 import { sampleMap } from "@/lib/sample-map";
 import { partSurface, locationDisplay } from "@/lib/part-utils";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle, panelStyle } from "@/lib/ui";
 import {
   AppApiContext,
   PartsListContext,
@@ -124,6 +125,7 @@ import {
   type LiftTarget,
 } from "@/components/lift-overlay";
 import { Toolbar, FrameMapButton } from "@/components/toolbar";
+import { ZoomPill } from "@/components/zoom-pill";
 import { PartsListPanel, PhonePartsSheet } from "@/components/parts-list";
 import { PhoneTopBar } from "@/components/phone-top-bar";
 import { PhoneQuickTools } from "@/components/phone-quick-tools";
@@ -145,6 +147,16 @@ import { useTourLock } from "@/hooks/use-tour-lock";
 
 const nodeTypes = { part: PartNode };
 const edgeTypes = { floating: FloatingEdge };
+
+/** Shared empty selection — a stable reference so "nothing selected"
+ *  never churns state identity. */
+const EMPTY_SET: ReadonlySet<string> = new Set();
+
+/** Desktop pan buttons: middle/right-drag pans (Miro parity); the left
+ *  button belongs to selection — bare left-drag on empty canvas draws a
+ *  marquee, and holding Space (RF's default panActivationKeyCode) turns
+ *  left-drag into a pan. Module-scope for a stable identity. */
+const DESKTOP_PAN_BUTTONS = [1, 2];
 
 /** One-shot keys for transient UI (notice pill, reveal glow). A monotonic
  *  counter, never a timestamp: two transients born in the same millisecond
@@ -198,8 +210,22 @@ function PartsMapApp() {
   const [autoScale, setAutoScale] = useState(true);
 
   // ——— view state ———
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  // Selection is a set — the desktop marquee can catch several at once.
+  // Everything single-part (edit popover/sheet, Enter-rename, tour) keys
+  // off the derived `selectedId`, which is non-null only for EXACTLY one
+  // selection, so a multi-select never summons an editor.
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(EMPTY_SET);
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState<ReadonlySet<string>>(EMPTY_SET);
+  const selectedId =
+    selectedIds.size === 1 ? selectedIds.values().next().value! : null;
+  const selectedEdgeId =
+    selectedEdgeIds.size === 1 ? selectedEdgeIds.values().next().value! : null;
+  const setSelectedId = useCallback((id: string | null) => {
+    setSelectedIds(id ? new Set([id]) : EMPTY_SET);
+  }, []);
+  const setSelectedEdgeId = useCallback((id: string | null) => {
+    setSelectedEdgeIds(id ? new Set([id]) : EMPTY_SET);
+  }, []);
   const [dragOverride, setDragOverride] = useState<{
     id: string;
     pos: XYPosition;
@@ -379,7 +405,7 @@ function PartsMapApp() {
       setTourMode(phone ? "phone" : "desktop");
       setTourStep(0);
     },
-    [selectedId, listOpen, exportMenuOpen, framedTick],
+    [selectedId, listOpen, exportMenuOpen, framedTick, setSelectedId, setSelectedEdgeId],
   );
   /** Every way the tour stops (skip, completion, layout flip, welcome
    *  reopening) funnels through here so the shepherd timer can never
@@ -532,6 +558,22 @@ function PartsMapApp() {
     const h = historyRef.current;
     const now = Date.now();
     const top = h[h.length - 1];
+    // Same-tick pushes see the same refs (they advance in an effect), so
+    // their snapshots are reference-identical — the same restore point.
+    // Merge instead of stacking: RF dispatches a delete cascade as edge
+    // removes THEN node removes in one tick, which otherwise costs two
+    // Ctrl+Z presses to undo one Delete.
+    if (
+      top &&
+      top.parts === partsRef.current &&
+      top.arrows === arrowsRef.current
+    ) {
+      top.at = now;
+      top.tag = tag;
+      top.label = label;
+      setUndoLabel(label);
+      return;
+    }
     if (top && top.tag === tag && now - top.at < 1000) {
       top.at = now;
       setUndoLabel(label);
@@ -1031,7 +1073,7 @@ function PartsMapApp() {
         setSelectedId(targetId);
       }, 400);
     }
-  }, [tourStep, tourSteps, tourMode, tourSnapshot, lift, fitAll, reducedMotion]);
+  }, [tourStep, tourSteps, tourMode, tourSnapshot, lift, fitAll, reducedMotion, setSelectedId]);
   // Unmount safety for the shepherd timer.
   useEffect(
     () => () => {
@@ -1104,7 +1146,7 @@ function PartsMapApp() {
     setUndoLabel(historyRef.current[historyRef.current.length - 1]?.label ?? null);
     setCanRedo(true);
     setRedoLabel(snap.label);
-  }, [cancelSettle]);
+  }, [cancelSettle, setSelectedId, setSelectedEdgeId]);
 
   /** Re-apply the last undone change. Symmetric with undo: banks the current
    *  (pre-redo) state onto history so the redo can itself be undone. */
@@ -1133,7 +1175,7 @@ function PartsMapApp() {
     setRedoLabel(redoRef.current[redoRef.current.length - 1]?.label ?? null);
     setCanUndo(true);
     setUndoLabel(snap.label);
-  }, [cancelSettle, markDirty]);
+  }, [cancelSettle, markDirty, setSelectedId, setSelectedEdgeId]);
 
   const settleTween = useCallback(
     (
@@ -1704,7 +1746,7 @@ function PartsMapApp() {
       setSelectedEdgeId(null);
       startLiftLoop();
     },
-    [rf, startLiftLoop, cancelSettle],
+    [rf, startLiftLoop, cancelSettle, setSelectedEdgeId],
   );
 
   const onNodeDrag = useCallback((e: MouseEvent | TouchEvent, node: Node) => {
@@ -1838,6 +1880,7 @@ function PartsMapApp() {
     // in the same batch are recognized as part of an active resize.
     const dims: { id: string; w: number; h: number }[] = [];
     const removed: string[] = [];
+    const selects: { id: string; selected: boolean }[] = [];
     for (const ch of changes) {
       if (ch.type === "dimensions" && ch.dimensions) {
         // Every measurement — resize or RF's initial DOM measure — is
@@ -1898,9 +1941,7 @@ function PartsMapApp() {
         // The locked tour's place steps own selection (see
         // tourSuppressSelectRef) — drop selects, keep deselects.
         if (!(ch.selected && tourSuppressSelectRef.current)) {
-          setSelectedId((prev) =>
-            ch.selected ? ch.id : prev === ch.id ? null : prev,
-          );
+          selects.push({ id: ch.id, selected: ch.selected });
           if (ch.selected) {
             maybeShowLinkHint();
             // One sheet at a time on phones: selecting a card summons the
@@ -1913,15 +1954,48 @@ function PartsMapApp() {
           }
         }
       } else if (ch.type === "remove") {
-        const nm = partsRef.current.find((p) => p.id === ch.id)?.name;
-        pushHistory(`delete:${ch.id}`, nm ? `deleted “${nm}”` : "delete");
-        setParts((ps) => ps.filter((p) => p.id !== ch.id));
-        setArrows((as) =>
-          as.filter((a) => a.sourceId !== ch.id && a.targetId !== ch.id),
-        );
         removed.push(ch.id);
-        autoArmedRef.current = true;
       }
+    }
+    // A marquee (de)selects several nodes in one change batch — fold them
+    // into ONE set update so intermediate states never render.
+    if (selects.length) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const s of selects) {
+          if (s.selected) next.add(s.id);
+          else next.delete(s.id);
+        }
+        return next.size === prev.size && [...next].every((id) => prev.has(id))
+          ? prev
+          : next;
+      });
+    }
+    // Group delete (marquee + Delete key) is ONE mutation: one history
+    // snapshot, one parts/arrows pass — not N stacked undo entries.
+    if (removed.length) {
+      const gone = new Set(removed);
+      const firstName = partsRef.current.find((p) => p.id === removed[0])?.name;
+      pushHistory(
+        removed.length === 1 ? `delete:${removed[0]}` : "delete-multi",
+        removed.length === 1
+          ? firstName
+            ? `deleted “${firstName}”`
+            : "delete"
+          : `deleted ${removed.length} parts`,
+      );
+      setParts((ps) => ps.filter((p) => !gone.has(p.id)));
+      setArrows((as) =>
+        as.filter((a) => !gone.has(a.sourceId) && !gone.has(a.targetId)),
+      );
+      setSelectedIds((prev) => {
+        if (![...prev].some((id) => gone.has(id))) return prev;
+        const next = new Set(prev);
+        for (const id of removed) next.delete(id);
+        return next;
+      });
+      // Removals free up room — let auto-space ease the body back.
+      autoArmedRef.current = true;
     }
     if (dims.length || removed.length) {
       setMeasuredDims((prev) => {
@@ -1943,11 +2017,11 @@ function PartsMapApp() {
   }, [pushHistory, maybeShowLinkHint]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const selects: { id: string; selected: boolean }[] = [];
+    const removed: string[] = [];
     for (const ch of changes) {
       if (ch.type === "select") {
-        setSelectedEdgeId((prev) =>
-          ch.selected ? ch.id : prev === ch.id ? null : prev,
-        );
+        selects.push({ id: ch.id, selected: ch.selected });
         // One sheet at a time on phones: selecting an arrow summons its
         // edit sheet, so the list and any create/share/more sheet step
         // aside first.
@@ -1956,9 +2030,37 @@ function PartsMapApp() {
           setPhoneSheet(null);
         }
       } else if (ch.type === "remove") {
-        pushHistory(`arrow-delete:${ch.id}`, "arrow removed");
-        setArrows((as) => as.filter((a) => a.id !== ch.id));
+        removed.push(ch.id);
       }
+    }
+    if (selects.length) {
+      setSelectedEdgeIds((prev) => {
+        const next = new Set(prev);
+        for (const s of selects) {
+          if (s.selected) next.add(s.id);
+          else next.delete(s.id);
+        }
+        return next.size === prev.size && [...next].every((id) => prev.has(id))
+          ? prev
+          : next;
+      });
+    }
+    // One snapshot per delete batch (see onNodesChange). When this is the
+    // edge half of a node-delete cascade, pushHistory's same-tick dedupe
+    // merges it with the node push into a single undo entry.
+    if (removed.length) {
+      const gone = new Set(removed);
+      pushHistory(
+        removed.length === 1 ? `arrow-delete:${removed[0]}` : "arrow-delete-multi",
+        removed.length === 1 ? "arrow removed" : `removed ${removed.length} arrows`,
+      );
+      setArrows((as) => as.filter((a) => !gone.has(a.id)));
+      setSelectedEdgeIds((prev) => {
+        if (![...prev].some((id) => gone.has(id))) return prev;
+        const next = new Set(prev);
+        for (const id of removed) next.delete(id);
+        return next;
+      });
     }
   }, [pushHistory]);
 
@@ -2007,7 +2109,12 @@ function PartsMapApp() {
         setArrows((as) =>
           as.filter((a) => a.sourceId !== id && a.targetId !== id),
         );
-        setSelectedId((prev) => (prev === id ? null : prev));
+        setSelectedIds((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
         // Removals free up room — let auto-space ease the body back.
         autoArmedRef.current = true;
       },
@@ -2194,7 +2301,12 @@ function PartsMapApp() {
       deleteArrow: (id) => {
         pushHistory(`arrow-delete:${id}`, "arrow removed");
         setArrows((as) => as.filter((a) => a.id !== id));
-        setSelectedEdgeId((prev) => (prev === id ? null : prev));
+        setSelectedEdgeIds((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       },
       selectArrow: (id) => {
         setSelectedEdgeId(id);
@@ -2203,24 +2315,29 @@ function PartsMapApp() {
         if (el) innerElsRef.current.set(id, el);
         else innerElsRef.current.delete(id);
       },
-      noticeBlockedDrag: (id) => {
+      noticeBlockedDrag: (id, reason) => {
         const p = partsRef.current.find((q) => q.id === id);
         if (!p) return;
         haptic(3); // refusal tick — same register as the other put-downs
         setNotice(
-          p.locked
+          reason === "multi"
             ? {
-                text: "Locked — unlock it in its editor to move it",
+                text: "Several parts are selected — drag them one at a time",
                 key: noticeKey(),
               }
-            : {
-                text: `It's on the ${partSurface(p)} — flip the view to move it`,
-                key: noticeKey(),
-              },
+            : p.locked
+              ? {
+                  text: "Locked — unlock it in its editor to move it",
+                  key: noticeKey(),
+                }
+              : {
+                  text: `It's on the ${partSurface(p)} — flip the view to move it`,
+                  key: noticeKey(),
+                },
         );
       },
     }),
-    [rf, settleTween, pushHistory],
+    [rf, settleTween, pushHistory, setSelectedId, setSelectedEdgeId],
   );
 
   /* ——— creation: spawn onto the staging shelf below the body ——— */
@@ -2305,7 +2422,7 @@ function PartsMapApp() {
         setSelectedId(id);
       }
     },
-    [rf, pushHistory, glideViewport, tourStep],
+    [rf, pushHistory, glideViewport, tourStep, setSelectedId],
   );
 
   /* ——— import ——— */
@@ -2410,7 +2527,7 @@ function PartsMapApp() {
       key: noticeKey(),
       action: { label: "Undo", run: undo },
     });
-  }, [pushHistory, undo]);
+  }, [pushHistory, undo, setSelectedId, setSelectedEdgeId]);
 
   /** The reset choreography shared by every "replace the whole map" path
    *  — file load and opening a cloud map alike. */
@@ -2448,7 +2565,7 @@ function PartsMapApp() {
       // A loaded map may open crowded — let the auto-grow pass judge it.
       autoArmedRef.current = true;
     },
-    [rf],
+    [rf, setSelectedId, setSelectedEdgeId],
   );
 
   /* ——— cloud maps (optional — signing in adds this on top of file
@@ -2562,7 +2679,7 @@ function PartsMapApp() {
       setListOpen(false);
       setPhoneSheet(which);
     },
-    [],
+    [setSelectedId],
   );
 
   /** Rename the open map from the top-bar title. Cloud maps rename in
@@ -2764,7 +2881,7 @@ function PartsMapApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId]);
+  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId, setSelectedId, setSelectedEdgeId]);
 
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
@@ -2928,15 +3045,24 @@ function PartsMapApp() {
         // Locked cards can't be dragged or key-deleted (they stay selectable
         // so the lock can be toggled off; the toolbar's explicit confirm-
         // delete calls api.deletePart directly and still works). Parked
-        // cards don't drag either — flip to their side to move them.
-        draggable: !p.locked && !parked,
+        // cards don't drag either — flip to their side to move them. A
+        // multi-selected card doesn't drag either: the marquee is select-
+        // only (group delete), because on-body positions are text-
+        // authoritative and the lift/magnet choreography is single-node
+        // by construction. Dragging an UNselected card collapses the
+        // selection to it first (RF's selectNodesOnDrag), so single drags
+        // are never blocked.
+        draggable:
+          !p.locked &&
+          !parked &&
+          !(selectedIds.size > 1 && selectedIds.has(p.id)),
         deletable: !p.locked,
         width: p.w,
         height: p.h,
         // Echo RF's own measurement back so adoptUserNodes doesn't wipe it
         // on every rebuild of these fresh node objects (RF error #015).
         measured: md ? { width: md.w, height: md.h } : undefined,
-        selected: p.id === selectedId,
+        selected: selectedIds.has(p.id),
         // The only accessible-name a screen reader gets for this card —
         // previously just whatever text happened to be inside it, so
         // location/note/surface never reached assistive tech at all.
@@ -2947,6 +3073,9 @@ function PartsMapApp() {
           popKey: dropPop?.id === p.id ? dropPop.key : 0,
           revealKey: reveal?.id === p.id ? reveal.key : 0,
           parked,
+          // The edit popover only appears for a lone selection — a marquee
+          // catching five cards must not open five toolbars.
+          solo: selectedIds.size <= 1,
         },
       };
     });
@@ -2956,7 +3085,7 @@ function PartsMapApp() {
     view,
     viewAnim,
     dragOverride,
-    selectedId,
+    selectedIds,
     lift,
     dropPop,
     reveal,
@@ -2970,11 +3099,18 @@ function PartsMapApp() {
         type: "floating" as const,
         source: a.sourceId,
         target: a.targetId,
-        selected: a.id === selectedEdgeId,
+        selected: selectedEdgeIds.has(a.id),
         // Arrows are black-only now (the per-arrow color picker was
         // removed); a.color is kept in the model for save-file round-trip
         // but no longer drives the render.
-        data: { label: a.label, sourceHandle: a.sourceHandle },
+        data: {
+          label: a.label,
+          sourceHandle: a.sourceHandle,
+          // The arrow popover opens only for a lone arrow selection (a
+          // marquee auto-selects edges between caught nodes — those must
+          // not each open a popover).
+          solo: selectedEdgeIds.size === 1 && selectedIds.size === 0,
+        },
         style: { stroke: ARROW_INK, strokeWidth: 2 },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -2983,7 +3119,7 @@ function PartsMapApp() {
           height: 16,
         },
       })),
-    [arrows, selectedEdgeId],
+    [arrows, selectedEdgeIds, selectedIds],
   );
 
   /** True while any phone overlay owns the stage — the floating notice
@@ -3062,7 +3198,13 @@ function PartsMapApp() {
           nodeClickDistance={8}
           paneClickDistance={8}
           multiSelectionKeyCode={null}
-          selectionOnDrag={false}
+          // Desktop is pointer-first (Miro web): bare left-drag on empty
+          // canvas draws a marquee; hold Space (RF's default
+          // panActivationKeyCode) or middle/right-drag to pan. Phones keep
+          // one-finger-pan untouched.
+          panOnDrag={isPhone ? true : DESKTOP_PAN_BUTTONS}
+          selectionOnDrag={!isPhone && !tourLocked}
+          selectionMode={SelectionMode.Partial}
           // The locked tour's guard gates pointers; these two close the
           // hardware side: Delete could strand the link step below two
           // parts (the delete BUTTON is denied, the key wasn't), and a
@@ -3124,7 +3266,9 @@ function PartsMapApp() {
         <div
           data-ui-chrome
           className="absolute left-1/2 top-[calc(4rem+env(safe-area-inset-top))] z-20 flex -translate-x-1/2 gap-0.5 rounded-full p-1"
-          style={{ ...panelStyle, touchAction: "manipulation" }}
+          // Shared surface: phone keeps the frosted pill; desktop matches
+          // the solid Miro-clean chrome.
+          style={{ ...(isPhone ? panelStyle : cardStyle), touchAction: "manipulation" }}
         >
           {(["front", "back"] as const).map((d) => (
             <button
@@ -3211,6 +3355,14 @@ function PartsMapApp() {
         />
         <FrameMapButton
           onFrame={() => {
+            fitAll();
+            setFramedTick((t) => t + 1);
+          }}
+        />
+        {/* Desktop viewport pill (fit / − / % / +) — the frame button
+            above serves phones; each hides where the other shows. */}
+        <ZoomPill
+          onFit={() => {
             fitAll();
             setFramedTick((t) => t + 1);
           }}

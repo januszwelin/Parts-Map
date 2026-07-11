@@ -29,6 +29,16 @@
     0 1px 3px rgba(60, 50, 40, 0.1), 0 4px 12px rgba(60, 50, 40, 0.07);
   --shadow-lift:
     0 10px 28px rgba(60, 50, 40, 0.2), 0 2px 8px rgba(60, 50, 40, 0.12);
+
+  /* Desktop chrome (Miro-web-inspired): solid white cards over the flat
+     canvas — no frost. The shadow keeps the palette's warm hue: a hairline
+     "border" layer, a tight contact shadow, and a soft ambient one. Phone
+     sheets keep --panel/--shadow-rest (frost earns its keep overlaying
+     content). */
+  --panel-solid: #ffffff;
+  --shadow-card:
+    0 0 0 1px rgba(60, 50, 40, 0.04), 0 2px 4px rgba(60, 50, 40, 0.05),
+    0 8px 24px rgba(60, 50, 40, 0.08);
 }
 
 @theme inline {
@@ -229,8 +239,35 @@ input[type="range"]::-moz-range-thumb {
 .react-flow__pane {
   cursor: default;
 }
+/* Pan-capable pane (holding Space on desktop; always on phone): show the
+   hand so the mode change is legible before the drag starts. */
+.react-flow__pane.draggable {
+  cursor: grab;
+}
+/* Desktop selection mode is permanently armed (bare left-drag = marquee),
+   and RF styles that state `cursor: pointer` — which would read as "the
+   whole canvas is clickable." Keep the plain arrow; the extra ancestor
+   out-specifies RF's rule regardless of stylesheet order. */
+.react-flow .react-flow__pane.selection {
+  cursor: default;
+}
+.react-flow .react-flow__pane.selection.draggable {
+  cursor: grab;
+}
 .react-flow__pane.dragging {
   cursor: grabbing;
+}
+/* The desktop marquee, in the app's palette instead of RF's default blue. */
+.react-flow__selection {
+  background: rgba(125, 139, 116, 0.08);
+  border: 1px dashed var(--accent);
+  border-radius: 2px;
+}
+/* RF draws a group-drag rect around a marquee's catch; the marquee here is
+   select-only (group delete) — on-body positions derive from named anchors,
+   so free-dragging a group is meaningless. Hide the rect entirely. */
+.react-flow__nodesselection {
+  display: none;
 }
 .react-flow__node {
   cursor: grab;

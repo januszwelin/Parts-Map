@@ -10,7 +10,7 @@ import { PALETTE, PALETTE_NAMES } from "@/lib/tuning";
 import { REGION_BY_KEY } from "@/lib/regions";
 import type { Part } from "@/lib/types";
 import { locationDisplay, partSurface, FONT_SIZE_LABELS } from "@/lib/part-utils";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle } from "@/lib/ui";
 import { useAppApi, usePartsList, useArrowsList } from "@/hooks/use-app-api";
 import { LocationPicker } from "@/components/location-picker";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -129,7 +129,7 @@ function NoteField({ part, sheet }: { part: Part; sheet?: boolean }) {
   useCommitOnDismiss(`note:${part.id}`, commit);
   return (
     <textarea
-      className={`nodrag nopan w-full resize-none rounded-md px-2 outline-none ${
+      className={`nodrag nopan nowheel w-full resize-none rounded-md px-2 outline-none ${
         sheet ? "py-2 text-sm" : "py-1 text-xs"
       }`}
       style={{
@@ -424,7 +424,7 @@ export function EditPopover({ part }: { part: Part }) {
 
   const chip = (active: boolean): React.CSSProperties => ({
     border: "1px solid var(--line)",
-    background: active ? "var(--ink)" : "rgba(255,255,255,0.7)",
+    background: active ? "var(--ink)" : "#fff",
     color: active ? "#fff" : "var(--ink-soft)",
   });
   const iconBtn =
@@ -436,8 +436,8 @@ export function EditPopover({ part }: { part: Part }) {
   return (
     <div
       ref={toolbarRef}
-      className="fade-in nodrag nopan flex items-center gap-1 rounded-2xl px-1.5 py-1.5"
-      style={{ ...panelStyle, transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
+      className="fade-in nodrag nopan nowheel flex items-center gap-1 rounded-2xl px-1.5 py-1.5"
+      style={{ ...cardStyle, transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
     >
       {/* drag grip */}
       <div
@@ -476,7 +476,7 @@ export function EditPopover({ part }: { part: Part }) {
         {openPop === "fill" && (
           <div
             className="fade-in absolute left-0 top-full z-20 mt-1 grid w-[152px] grid-cols-4 gap-1 rounded-xl p-2"
-            style={panelStyle}
+            style={cardStyle}
           >
             {PALETTE.map((c) => (
               <button
@@ -521,7 +521,7 @@ export function EditPopover({ part }: { part: Part }) {
         {openPop === "size" && (
           <div
             className="fade-in absolute left-0 top-full z-20 mt-1 flex w-[116px] flex-col gap-0.5 rounded-xl p-1.5"
-            style={panelStyle}
+            style={cardStyle}
           >
             {(["s", "m", "l"] as const).map((s) => (
               <button
@@ -638,7 +638,7 @@ export function EditPopover({ part }: { part: Part }) {
         {openPop === "location" && (
           <div
             className="fade-in absolute right-0 top-full z-20 mt-1 w-[264px] rounded-xl p-3"
-            style={panelStyle}
+            style={cardStyle}
           >
             <LocationPicker part={part} onDone={() => setOpenPop(null)} />
           </div>
@@ -659,7 +659,7 @@ export function EditPopover({ part }: { part: Part }) {
         {openPop === "more" && (
           <div
             className="fade-in absolute right-0 top-full z-20 mt-1 flex w-[248px] flex-col gap-2.5 rounded-xl p-3"
-            style={panelStyle}
+            style={cardStyle}
           >
             <div>
               <div className="pb-1 text-[11px]" style={{ color: "var(--ink-faint)" }}>

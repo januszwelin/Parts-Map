@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MIN_SCALE, MAX_SCALE } from "@/lib/tuning";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle, panelStyle } from "@/lib/ui";
 import { authClient } from "@/lib/auth-client";
 import { useIsPhone } from "@/hooks/use-media";
 
@@ -172,8 +172,8 @@ export function Toolbar(props: {
       className={`pointer-events-none absolute inset-x-0 top-0 z-20 hidden justify-center p-3 ${isPhone ? "" : "sm:flex"}`}
     >
       <div
-        className="pointer-events-auto relative flex w-auto max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-2xl px-3 py-2"
-        style={{ ...panelStyle, touchAction: "manipulation" }}
+        className="pointer-events-auto relative flex w-auto max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-xl px-3 py-2"
+        style={{ ...cardStyle, touchAction: "manipulation" }}
       >
         <button
           data-tour="list"
@@ -222,7 +222,7 @@ export function Toolbar(props: {
         <input
           className="w-24 min-w-0 flex-1 rounded-lg px-3 py-1.5 text-sm outline-none sm:w-44 sm:flex-none"
           style={{
-            background: "rgba(255,255,255,0.75)",
+            background: "#fff",
             border: "1px solid var(--line)",
           }}
           placeholder="Name a part…"
@@ -289,7 +289,7 @@ export function Toolbar(props: {
             {accountOpen && (
               <div
                 className="fade-in absolute right-0 top-full z-20 mt-1 w-44 rounded-xl p-1.5"
-                style={panelStyle}
+                style={cardStyle}
               >
                 <button
                   className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
@@ -428,13 +428,16 @@ export function Toolbar(props: {
   );
 }
 
-/** The way home. The canvas is endless and easy to get lost in, so the
- *  frame-map control is a standalone floating button — always in the same
- *  corner on both layouts, big enough to hit without looking. */
+/** The way home on PHONES: the canvas is endless and easy to get lost
+ *  in, so frame-map is a standalone floating button, big enough to hit
+ *  without looking. Desktop gets the ZoomPill (zoom-pill.tsx) in the
+ *  same corner instead — its fit button carries the visible
+ *  [data-tour="frame"] anchor there. */
 export function FrameMapButton({ onFrame }: { onFrame: () => void }) {
-  // Landscape phones are ≥640px wide: the `sm:` offset is for real
-  // desktops only, so it yields to the phone clearance whenever
-  // useIsPhone says phone (same JS-override pattern as the top bars).
+  // Landscape phones are ≥640px wide: CSS-hidden at `sm` for real
+  // desktops, un-hidden by JS whenever useIsPhone says phone (inverse of
+  // the top Toolbar's pattern; useIsPhone starts false so first paint
+  // matches the SSR markup).
   const isPhone = useIsPhone();
   return (
     <button
@@ -445,7 +448,7 @@ export function FrameMapButton({ onFrame }: { onFrame: () => void }) {
       // panelStyle's inline background beats hover:/active:bg — the press
       // reads as a small scale dip instead (the hover wash was already
       // dead for the same reason).
-      className={`absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] z-20 flex h-11 w-11 items-center justify-center rounded-full transition-transform active:scale-95 motion-reduce:active:scale-100 ${isPhone ? "" : "sm:bottom-10"}`}
+      className={`absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] z-20 flex h-11 w-11 items-center justify-center rounded-full transition-transform active:scale-95 motion-reduce:active:scale-100 ${isPhone ? "" : "sm:hidden"}`}
       style={{ ...panelStyle, touchAction: "manipulation" }}
       onClick={onFrame}
     >

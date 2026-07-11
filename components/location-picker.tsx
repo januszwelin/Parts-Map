@@ -95,7 +95,7 @@ export function LocationPicker({
         onPointerDown={(e) => e.stopPropagation()}
       />
       <div
-        className="-mx-1 overflow-y-auto overscroll-contain px-1"
+        className="nowheel -mx-1 overflow-y-auto overscroll-contain px-1"
         style={{ maxHeight: "40dvh" }}
       >
         {resolvedRegion && !alreadyListed && (

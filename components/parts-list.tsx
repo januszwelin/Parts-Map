@@ -8,7 +8,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Arrow, Part, Depth } from "@/lib/types";
 import { partIsBack, locationDisplay } from "@/lib/part-utils";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle } from "@/lib/ui";
 import {
   copyText,
   mapText,
@@ -173,7 +173,7 @@ function ExportMenu({
         <div
           role="menu"
           className="fade-in absolute right-0 top-full z-20 mt-1 w-48 rounded-xl p-1.5"
-          style={panelStyle}
+          style={cardStyle}
         >
           <button
             role="menuitem"
@@ -421,10 +421,10 @@ export function PartsListPanel({
   return (
     <div
       data-ui-chrome
-      className={`absolute bottom-[calc(72px+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] top-3 z-10 flex w-[min(264px,78vw)] flex-col rounded-2xl transition-transform duration-300 ease-out motion-reduce:transition-none sm:bottom-3 sm:top-[68px] ${
+      className={`absolute bottom-[calc(72px+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] top-3 z-10 flex w-[min(264px,78vw)] flex-col rounded-xl transition-transform duration-300 ease-out motion-reduce:transition-none sm:bottom-3 sm:top-[68px] ${
         open ? "translate-x-0" : "-translate-x-[120%]"
       }`}
-      style={panelStyle}
+      style={cardStyle}
     >
       <div
         className="flex items-center justify-between px-3.5 py-2.5"
@@ -460,7 +460,7 @@ export function PartsListPanel({
           <input
             className="w-full rounded-md px-2 py-1 text-[11px] outline-none"
             style={{
-              background: "rgba(255,255,255,0.7)",
+              background: "#fff",
               border: "1px solid var(--line)",
               color: "var(--ink)",
             }}
