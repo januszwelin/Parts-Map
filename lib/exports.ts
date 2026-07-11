@@ -1,13 +1,19 @@
 /* ════════════════════════════════════════════════════════════════════
-   EXPORTS — clipboard text flowchart + PNG flowchart download
+   EXPORTS — shareable map text (native share sheet with clipboard
+   fallback) + PNG flowchart/map downloads and shares
    ════════════════════════════════════════════════════════════════════ */
 
-import type { Arrow, Part } from "@/lib/types";
+import type { Arrow, Part, Depth } from "@/lib/types";
 import type { XYPosition } from "@xyflow/react";
-import { BODY_H, BODY_W } from "@/lib/tuning";
-import { figureCenterX, derivePositions, rectEdgePoint } from "@/lib/geometry";
+import { BODY_H, BODY_W, ARROW_INK } from "@/lib/tuning";
+import { derivePositions, rectEdgePoint } from "@/lib/geometry";
 import { BODY_PATHS, BODY_BACK_DETAIL } from "@/lib/body-paths";
-import { FONT_PX, SHAPE_RADIUS, partIsBack } from "@/lib/part-utils";
+import {
+  FONT_PX,
+  SHAPE_RADIUS,
+  partIsBack,
+  locationDisplay,
+} from "@/lib/part-utils";
 
 /** Clipboard write with a legacy fallback (non-secure contexts, denied
  *  permission). Resolves true only when the text actually copied — the
@@ -78,6 +84,46 @@ export function relationshipsText(parts: Part[], arrows: Arrow[]): string {
     }
   }
   return lines.join("\n");
+}
+
+/** The whole map as one readable, shareable text: every part with its
+ *  location (and note), then the relationship lines from
+ *  `relationshipsText`. One payload for the native share sheet or the
+ *  clipboard — replaces the old separate "copy list" and "copy
+ *  relationships" actions. */
+export function mapText(parts: Part[], arrows: Arrow[]): string {
+  const head = `My parts map — ${parts.length} part${parts.length === 1 ? "" : "s"}`;
+  const rows = parts.map((p) => {
+    const note = p.note ? ` · ${p.note}` : "";
+    return `${p.name} — ${locationDisplay(p)}${note}`;
+  });
+  const rel = relationshipsText(parts, arrows);
+  return [head, "", ...rows, ...(rel ? ["", "Relationships:", rel] : [])].join(
+    "\n",
+  );
+}
+
+/** Hand text to the OS share sheet where one exists (phones), falling
+ *  back to the clipboard. "cancelled" means the person closed the share
+ *  sheet themselves — not a failure, callers stay quiet about it. */
+export async function shareText(
+  text: string,
+): Promise<"shared" | "copied" | "cancelled" | "failed"> {
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function"
+  ) {
+    try {
+      await navigator.share({ text });
+      return "shared";
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        return "cancelled";
+      }
+      // NotAllowedError and friends — fall through to the clipboard.
+    }
+  }
+  return (await copyText(text)) ? "copied" : "failed";
 }
 
 /* ——— Flowchart PNG export ———
@@ -238,16 +284,14 @@ function flowchartSvg(
   const ox = -minX; // shift into positive coordinates
   const oy = FLOW_MARGIN;
 
-  const colors = [...new Set(edges.map((a) => a.color))];
-  const markerId = new Map(colors.map((c, i) => [c, `fc-arrow-${i}`]));
-  const defs = colors
-    .map(
-      (c) =>
-        `<marker id="${markerId.get(c)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${c}"/></marker>`,
-    )
-    .join("");
+  // Arrows are black-only now — one shared marker instead of one per color.
+  const defs = `<marker id="fc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${ARROW_INK}"/></marker>`;
 
   const pieces: string[] = [];
+  // Arrow labels are collected separately and painted last (above the node
+  // cards) — otherwise a card overlapping an arrow's midpoint hides its
+  // label, since SVG paints in document order.
+  const labelPieces: string[] = [];
   for (const a of edges) {
     const s = byId.get(a.sourceId)!;
     const t = byId.get(a.targetId)!;
@@ -276,18 +320,18 @@ function flowchartSvg(
       mid = { x: (x0 + 3 * (x0 + k) + 3 * (x1 + k) + x1) / 8, y: (y0 + y1) / 2 };
     }
     pieces.push(
-      `<path d="${d}" fill="none" stroke="${a.color}" stroke-width="2" marker-end="url(#${markerId.get(a.color)})"/>`,
+      `<path d="${d}" fill="none" stroke="${ARROW_INK}" stroke-width="2" marker-end="url(#fc-arrow)"/>`,
     );
     if (a.label) {
       const label = escapeXml(a.label);
       const pw = Math.ceil(measure(a.label, 11)) + 16;
-      pieces.push(
+      labelPieces.push(
         `<rect x="${mid.x - pw / 2}" y="${mid.y - 9}" width="${pw}" height="18" rx="9" fill="#fdfcfa" stroke="#e4e0d8"/>`,
         `<text x="${mid.x}" y="${mid.y}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="11" fill="#6f6a62">${label}</text>`,
       );
     }
   }
-  // nodes above edges' lines but below nothing else
+  // nodes above the edge lines…
   for (const n of nodes) {
     pieces.push(
       `<rect x="${ox + n.x}" y="${oy + n.y}" width="${n.w}" height="${n.h}" rx="14" fill="${n.part.color}" stroke="rgba(58,55,51,0.08)"/>`,
@@ -300,20 +344,19 @@ function flowchartSvg(
     `<defs>${defs}</defs>` +
     `<rect width="${w}" height="${h}" fill="#f7f5f1"/>` +
     pieces.join("") +
+    // …and arrow labels above the nodes, so they're never occluded.
+    labelPieces.join("") +
     `</svg>`;
   return { svg, w, h };
 }
 
-/** Rasterize an SVG string at 2× and download it as a PNG. Resolves true
- *  only when the file was actually handed to the browser — the "exported
- *  ✓" feedback must never lie. Shared by the flowchart export and the
- *  spatial map-image export below. */
-async function rasterizeSvgToPng(
+/** Rasterize an SVG string to a 2× PNG blob — null on any failure.
+ *  Shared by the download and native-share paths below. */
+async function svgToPngBlob(
   svg: string,
   w: number,
   h: number,
-  filename: string,
-): Promise<boolean> {
+): Promise<Blob | null> {
   const url = URL.createObjectURL(
     new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
   );
@@ -328,14 +371,22 @@ async function rasterizeSvgToPng(
     canvas.width = w * 2;
     canvas.height = h * 2;
     const c = canvas.getContext("2d");
-    if (!c) return false;
+    if (!c) return null;
     c.scale(2, 2);
     c.drawImage(img, 0, 0);
-    const png = await new Promise<Blob | null>((resolve) =>
+    return await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/png"),
     );
-    if (!png) return false;
-    const dl = URL.createObjectURL(png);
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function downloadBlob(blob: Blob, filename: string): boolean {
+  try {
+    const dl = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = dl;
     a.download = filename;
@@ -344,9 +395,51 @@ async function rasterizeSvgToPng(
     return true;
   } catch {
     return false;
-  } finally {
-    URL.revokeObjectURL(url);
   }
+}
+
+/** Rasterize an SVG string at 2× and download it as a PNG. Resolves true
+ *  only when the file was actually handed to the browser — the "exported
+ *  ✓" feedback must never lie. */
+async function rasterizeSvgToPng(
+  svg: string,
+  w: number,
+  h: number,
+  filename: string,
+): Promise<boolean> {
+  const png = await svgToPngBlob(svg, w, h);
+  return png ? downloadBlob(png, filename) : false;
+}
+
+/** Hand a rasterized PNG to the OS share sheet (phones — save to Photos,
+ *  message it on…); where files can't be shared, fall back to a plain
+ *  download so the action never dead-ends. "cancelled" = the person
+ *  closed the share sheet, not a failure. */
+async function sharePng(
+  svg: string,
+  w: number,
+  h: number,
+  filename: string,
+): Promise<"shared" | "downloaded" | "cancelled" | "failed"> {
+  const png = await svgToPngBlob(svg, w, h);
+  if (!png) return "failed";
+  const file = new File([png], filename, { type: "image/png" });
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function" &&
+    navigator.canShare?.({ files: [file] })
+  ) {
+    try {
+      await navigator.share({ files: [file] });
+      return "shared";
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        return "cancelled";
+      }
+      // fall through to the download
+    }
+  }
+  return downloadBlob(png, filename) ? "downloaded" : "failed";
 }
 
 /** Rasterize the flowchart SVG at 2× and download it as a PNG. Resolves
@@ -361,11 +454,21 @@ export async function downloadFlowchartPng(
   return rasterizeSvgToPng(built.svg, built.w, built.h, "parts-map-flowchart.png");
 }
 
+/** Share the flowchart PNG via the OS share sheet (download fallback). */
+export async function shareFlowchartPng(
+  parts: Part[],
+  arrows: Arrow[],
+): Promise<"shared" | "downloaded" | "cancelled" | "failed"> {
+  const built = flowchartSvg(parts, arrows);
+  if (!built) return "failed";
+  return sharePng(built.svg, built.w, built.h, "parts-map-flowchart.png");
+}
+
 /* ——— Spatial map-image export ———
    Unlike the flowchart above (an abstract top-down relationship diagram),
-   this draws what the person actually built: parts on the body silhouette,
-   front and back, in their real positions — the same geometry the live
-   canvas uses (derivePositions, figureCenterX, the traced body paths),
+   this draws what the person actually built: parts on the single body
+   silhouette for the active view, in their real positions — the same
+   geometry the live canvas uses (derivePositions, the traced body paths),
    redrawn as a flat SVG so it can be rasterized outside the page. Colors
    are literals for the same reason as the flowchart export. */
 
@@ -382,6 +485,7 @@ function mapSvg(
   parts: Part[],
   arrows: Arrow[],
   bodyScale: number,
+  view: Depth,
 ): { svg: string; w: number; h: number } | null {
   if (!parts.length) return null;
   const ctx = document.createElement("canvas").getContext("2d");
@@ -391,8 +495,13 @@ function mapSvg(
     return ctx.measureText(text).width;
   };
 
-  const posMap = derivePositions(parts, bodyScale);
-  const cards: MapCard[] = parts.map((p) => {
+  const posMap = derivePositions(parts, bodyScale, view);
+  // Only the shown surface: off-body cards plus on-body cards whose surface
+  // is the active view (parked cards are omitted from the snapshot).
+  const shown = parts.filter(
+    (p) => p.offBody || (partIsBack(p) ? "back" : "front") === view,
+  );
+  const cards: MapCard[] = shown.map((p) => {
     const pos = posMap.get(p.id) ?? { x: 0, y: 0 };
     const px = FONT_PX[p.fontSize];
     let label = p.name;
@@ -408,18 +517,12 @@ function mapSvg(
   });
   const cardById = new Map(cards.map((c) => [c.part.id, c]));
 
-  // Bounds: both figure boxes (always — the body is context even for an
+  // Bounds: the single body box (always — the body is context even for an
   // all-off-body map) plus every card's full extent.
   const half = (BODY_H * bodyScale) / 2;
   const figHalfW = (BODY_W * bodyScale) / 2;
-  let minX = Math.min(
-    figureCenterX("front", bodyScale) - figHalfW,
-    figureCenterX("back", bodyScale) - figHalfW,
-  );
-  let maxX = Math.max(
-    figureCenterX("front", bodyScale) + figHalfW,
-    figureCenterX("back", bodyScale) + figHalfW,
-  );
+  let minX = -figHalfW;
+  let maxX = figHalfW;
   let minY = -half;
   let maxY = half;
   for (const c of cards) {
@@ -440,7 +543,7 @@ function mapSvg(
 
   const bodyStroke = 'fill="none" stroke="#3a3733" stroke-opacity="0.35" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const figureSvg = (depth: "front" | "back") => {
-    const cx = figureCenterX(depth, bodyScale) + ox;
+    const cx = ox; // single body centered at flow x = 0
     const cy = oy;
     const s = bodyScale;
     const paths = BODY_PATHS.map((d) => `<path d="${d}" ${bodyStroke}/>`).join("");
@@ -464,14 +567,11 @@ function mapSvg(
   };
 
   const arrowPieces: string[] = [];
-  const arrowColors = [...new Set(arrows.map((a) => a.color))];
-  const markerId = new Map(arrowColors.map((c, i) => [c, `map-arrow-${i}`]));
-  const arrowDefs = arrowColors
-    .map(
-      (c) =>
-        `<marker id="${markerId.get(c)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${c}"/></marker>`,
-    )
-    .join("");
+  // Labels ride above the cards (painted last) so an overlapping card can't
+  // hide them — SVG paints in document order.
+  const arrowLabelPieces: string[] = [];
+  // Arrows are black-only now — one shared marker instead of one per color.
+  const arrowDefs = `<marker id="map-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${ARROW_INK}"/></marker>`;
   for (const a of arrows) {
     const sc = cardById.get(a.sourceId);
     const tc = cardById.get(a.targetId);
@@ -491,12 +591,12 @@ function mapSvg(
     const mx = (sp.x + tp.x) / 2 + ox;
     const my = (sp.y + tp.y) / 2 + oy;
     arrowPieces.push(
-      `<path d="M${sp.x + ox} ${sp.y + oy} L${tp.x + ox} ${tp.y + oy}" fill="none" stroke="${a.color}" stroke-width="2" marker-end="url(#${markerId.get(a.color)})"/>`,
+      `<path d="M${sp.x + ox} ${sp.y + oy} L${tp.x + ox} ${tp.y + oy}" fill="none" stroke="${ARROW_INK}" stroke-width="2" marker-end="url(#map-arrow)"/>`,
     );
     if (a.label) {
       const label = escapeXml(a.label);
       const pw = Math.ceil(measure(a.label, 11)) + 16;
-      arrowPieces.push(
+      arrowLabelPieces.push(
         `<rect x="${mx - pw / 2}" y="${my - 9}" width="${pw}" height="18" rx="9" fill="#fdfcfa" stroke="#e4e0d8"/>`,
         `<text x="${mx}" y="${my}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="11" fill="#6f6a62">${label}</text>`,
       );
@@ -521,7 +621,7 @@ function mapSvg(
       : "";
     return (
       shape +
-      `<text x="${c.pos.x + ox}" y="${c.pos.y + oy}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="${FONT_PX[c.part.fontSize]}" font-weight="${c.part.bold ? 600 : 400}" fill="#3a3733">${escapeXml(c.label)}</text>` +
+      `<text x="${c.pos.x + ox}" y="${c.pos.y + oy}" text-anchor="middle" dominant-baseline="central" font-family="${FLOW_FONT_STACK}" font-size="${FONT_PX[c.part.fontSize]}" font-weight="${c.part.bold ? 600 : 400}"${c.part.underline ? ' text-decoration="underline"' : ""} fill="#3a3733">${escapeXml(c.label)}</text>` +
       back
     );
   });
@@ -530,10 +630,11 @@ function mapSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
     `<defs>${arrowDefs}</defs>` +
     `<rect width="${w}" height="${h}" fill="#f7f5f1"/>` +
-    figureSvg("front") +
-    figureSvg("back") +
+    figureSvg(view) +
     arrowPieces.join("") +
     cardPieces.join("") +
+    // arrow labels last — above the cards, so they're never occluded.
+    arrowLabelPieces.join("") +
     `</svg>`;
   return { svg, w, h };
 }
@@ -546,8 +647,21 @@ export async function downloadMapPng(
   parts: Part[],
   arrows: Arrow[],
   bodyScale: number,
+  view: Depth,
 ): Promise<boolean> {
-  const built = mapSvg(parts, arrows, bodyScale);
+  const built = mapSvg(parts, arrows, bodyScale, view);
   if (!built) return false;
   return rasterizeSvgToPng(built.svg, built.w, built.h, "parts-map.png");
+}
+
+/** Share the spatial map PNG via the OS share sheet (download fallback). */
+export async function shareMapPng(
+  parts: Part[],
+  arrows: Arrow[],
+  bodyScale: number,
+  view: Depth,
+): Promise<"shared" | "downloaded" | "cancelled" | "failed"> {
+  const built = mapSvg(parts, arrows, bodyScale, view);
+  if (!built) return "failed";
+  return sharePng(built.svg, built.w, built.h, "parts-map.png");
 }

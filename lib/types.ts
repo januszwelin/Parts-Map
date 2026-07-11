@@ -21,12 +21,18 @@ export type Part = {
   color: string;
   fontSize: FontSize;
   bold: boolean;
+  /** Underline the card text. Optional — absent reads as false, so old
+   *  save files and every existing construction site stay valid. */
+  underline?: boolean;
   shape: Shape;
   /** Explicit card size once resized by hand. */
   w?: number;
   h?: number;
   /** Optional private note — a few words the person keeps with the part. */
   note?: string;
+  /** When true, the card can't be dragged or resized until unlocked
+   *  (it stays selectable so the lock can be toggled off). */
+  locked?: boolean;
 };
 
 export type HandleSide = "st" | "sr" | "sb" | "sl";

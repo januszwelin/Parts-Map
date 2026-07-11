@@ -1,8 +1,9 @@
 "use client";
 
 /* ════════════════════════════════════════════════════════════════════
-   FLOATING EDGE — arrows between cards, with label pill + popover, and
-   the in-progress connection line
+   FLOATING EDGE — arrows between cards, with label pill + popover
+   (desktop), the phone arrow-edit bottom sheet, and the in-progress
+   connection line
    ════════════════════════════════════════════════════════════════════ */
 
 import { useLayoutEffect, useRef, useState } from "react";
@@ -16,12 +17,14 @@ import {
   type EdgeProps,
   type ConnectionLineComponentProps,
 } from "@xyflow/react";
-import { ARROW_COLORS, ARROW_COLOR_NAMES } from "@/lib/tuning";
-import { rectEdgePoint, pointOnRectSide } from "@/lib/geometry";
+import { pointOnRectSide, nearestCardinalSide } from "@/lib/geometry";
+import { ARROW_INK } from "@/lib/tuning";
 import { panelStyle } from "@/lib/ui";
 import { useAppApi } from "@/hooks/use-app-api";
 import { useIsCoarse, useIsPhone } from "@/hooks/use-media";
-import type { HandleSide } from "@/lib/types";
+import type { Arrow, HandleSide } from "@/lib/types";
+import { BottomSheet } from "@/components/bottom-sheet";
+import { useCommitOnDismiss } from "@/components/part-editor";
 
 /** Keep the selected-arrow popover clear of the toolbar/notice-pill chrome
  *  at the top and bottom of the screen — unlike the part editors, this
@@ -31,13 +34,22 @@ import type { HandleSide } from "@/lib/types";
 const VIEWPORT_MARGIN = { top: 64, bottom: 84, side: 12 };
 
 export type FloatingEdgeType = Edge<
-  { color: string; label?: string; sourceHandle?: HandleSide },
+  { label?: string; sourceHandle?: HandleSide },
   "floating"
 >;
 
 /** Small text input for an arrow's relationship label ("manages",
- *  "protects", …). Local draft state, committed on blur / Enter. */
-function ArrowLabelInput({ id, label }: { id: string; label?: string }) {
+ *  "protects", …). Local draft state, committed on blur / Enter. The
+ *  `sheet` variant is full-width and thumb-sized for the phone sheet. */
+function ArrowLabelInput({
+  id,
+  label,
+  sheet,
+}: {
+  id: string;
+  label?: string;
+  sheet?: boolean;
+}) {
   const api = useAppApi();
   const [text, setText] = useState(label ?? "");
   // Re-seed the draft when the authoritative label changes underneath us
@@ -52,9 +64,17 @@ function ArrowLabelInput({ id, label }: { id: string; label?: string }) {
     if (t === (label ?? "")) return;
     api.updateArrow(id, { label: t || undefined });
   };
+  // Every dismissal unmounts this field (deselect nulls the arrow prop),
+  // so the unmount flush covers swipe/scrim/Done/pane-tap — paths where
+  // iOS never fires the blur this field otherwise commits on.
+  useCommitOnDismiss(`arrow-label:${id}`, commit);
   return (
     <input
-      className="nodrag nopan w-36 rounded-md px-2 py-1 text-xs outline-none"
+      className={
+        sheet
+          ? "nodrag nopan w-full rounded-lg px-3 py-2 text-sm outline-none"
+          : "nodrag nopan w-36 rounded-md px-2 py-1 text-xs outline-none"
+      }
       style={{
         background: "rgba(255,255,255,0.7)",
         border: "1px solid var(--line)",
@@ -62,6 +82,7 @@ function ArrowLabelInput({ id, label }: { id: string; label?: string }) {
       }}
       placeholder="label — e.g. manages"
       maxLength={40}
+      enterKeyHint="done"
       value={text}
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
@@ -183,48 +204,30 @@ export function FloatingEdge({
     x: tn.internals.positionAbsolute.x + td.w / 2,
     y: tn.internals.positionAbsolute.y + td.h / 2,
   };
-  // Terminate on a slightly expanded rect: the node layer paints above the
-  // edge SVG, so a path ending exactly on the border loses the arrowhead
-  // tip under the card. A small breathing gap keeps the full head visible
-  // at any approach angle (flow-space, so it scales with zoom).
-  //
-  // The source side is fixed to whichever connect dot the arrow was
-  // actually dragged from, when known — otherwise (legacy arrows saved
-  // before this field existed) it falls back to the old geometry-only
-  // calculation. The target side always stays geometry-only: connections
-  // drop anywhere on the target card (one full-card Handle, deliberately,
-  // for forgiving touch drops), so there's no equivalent fixed side to use.
-  let sp: { x: number; y: number };
-  let sourcePosition: Position;
-  if (data?.sourceHandle) {
-    sourcePosition = HANDLE_TO_POSITION[data.sourceHandle];
-    sp = pointOnRectSide(
-      sc,
-      sd.w + SOURCE_GAP * 2,
-      sd.h + SOURCE_GAP * 2,
-      data.sourceHandle,
-    );
-  } else {
-    sp = rectEdgePoint(sc, sd.w + SOURCE_GAP * 2, sd.h + SOURCE_GAP * 2, tc);
-    const horizontal = Math.abs(tc.x - sc.x) > Math.abs(tc.y - sc.y);
-    sourcePosition = horizontal
-      ? tc.x > sc.x
-        ? Position.Right
-        : Position.Left
-      : tc.y > sc.y
-        ? Position.Bottom
-        : Position.Top;
-  }
+  // Both ends attach to a cardinal MIDPOINT (top/bottom/left/right) of the
+  // card — never an arbitrary point along the edge. The source uses
+  // whichever connect dot it was dragged from (data.sourceHandle) when
+  // known, else the side facing the target; the target uses the side facing
+  // the source. A small breathing gap (SOURCE_GAP/ARROW_GAP) keeps the
+  // head/tail off the card face (the node layer paints above the edge SVG),
+  // in flow-space so it scales with zoom.
+  const sourceSide: HandleSide = data?.sourceHandle ?? nearestCardinalSide(sc, tc);
+  const sp = pointOnRectSide(
+    sc,
+    sd.w + SOURCE_GAP * 2,
+    sd.h + SOURCE_GAP * 2,
+    sourceSide,
+  );
+  const sourcePosition = HANDLE_TO_POSITION[sourceSide];
 
-  const tp = rectEdgePoint(tc, td.w + ARROW_GAP * 2, td.h + ARROW_GAP * 2, sp);
-  const horizontalToTarget = Math.abs(tc.x - sp.x) > Math.abs(tc.y - sp.y);
-  const targetPosition = horizontalToTarget
-    ? tc.x > sp.x
-      ? Position.Left
-      : Position.Right
-    : tc.y > sp.y
-      ? Position.Top
-      : Position.Bottom;
+  const targetSide = nearestCardinalSide(tc, sp);
+  const tp = pointOnRectSide(
+    tc,
+    td.w + ARROW_GAP * 2,
+    td.h + ARROW_GAP * 2,
+    targetSide,
+  );
+  const targetPosition = HANDLE_TO_POSITION[targetSide];
 
   const [path, labelX, labelY] = getBezierPath({
     sourceX: sp.x,
@@ -245,7 +248,10 @@ export function FloatingEdge({
         style={style}
         interactionWidth={coarse ? 44 : 24}
       />
-      {(selected || data?.label) && (
+      {/* The floating popover is desktop-only — on phones a selected arrow
+          opens the ArrowEditSheet below (keyboard-aware, thumb-sized), and
+          only the label pill renders here. */}
+      {((selected && !isPhone) || data?.label) && (
         <EdgeLabelRenderer>
           <div
             className="nopan absolute"
@@ -254,7 +260,7 @@ export function FloatingEdge({
               pointerEvents: "all",
             }}
           >
-            {selected ? (
+            {selected && !isPhone ? (
               <div
                 ref={popoverRef}
                 className="fade-in flex max-w-[min(20rem,88vw)] flex-wrap items-center justify-center gap-x-1.5 gap-y-2 rounded-2xl px-3 py-2"
@@ -304,33 +310,6 @@ export function FloatingEdge({
                     >
                       delete
                     </button>
-                    <div className="flex w-full flex-wrap items-center justify-center gap-0.5">
-                      {ARROW_COLORS.map((c) => (
-                        <button
-                          key={c}
-                          aria-label={`Arrow color ${ARROW_COLOR_NAMES[c] ?? c}`}
-                          aria-pressed={data?.color === c}
-                          onClick={() => api.updateArrow(id, { color: c })}
-                          className={
-                            isPhone
-                              ? "flex h-9 w-9 items-center justify-center rounded-full"
-                              : "flex h-7 w-7 items-center justify-center rounded-full"
-                          }
-                        >
-                          <span
-                            className={isPhone ? "h-5 w-5 rounded-full" : "h-4 w-4 rounded-full"}
-                            style={{
-                              background: c,
-                              outline:
-                                data?.color === c
-                                  ? "2px solid var(--ink)"
-                                  : "none",
-                              outlineOffset: 1,
-                            }}
-                          />
-                        </button>
-                      ))}
-                    </div>
                   </>
                 )}
               </div>
@@ -355,23 +334,128 @@ export function FloatingEdge({
   );
 }
 
+/** Phone arrow editor — a keyboard-aware bottom sheet (the same shell as
+ *  part editing) replacing the floating popover, which was a desktop
+ *  pattern: tiny label input, and the iOS keyboard could cover it.
+ *  Mounted once at app level, driven by the selected edge. */
+export function ArrowEditSheet({
+  arrow,
+  open,
+  onClose,
+}: {
+  arrow: Arrow | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const api = useAppApi();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // A close or a different arrow drops any pending "delete?" (render-time
+  // derived-state reset, the file's idiom).
+  const editKey = `${open}:${arrow?.id ?? ""}`;
+  const [wasKey, setWasKey] = useState(editKey);
+  if (wasKey !== editKey) {
+    setWasKey(editKey);
+    setConfirmDelete(false);
+  }
+  const rowCls =
+    "flex min-h-12 w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left text-sm transition-colors hover:bg-black/5 active:bg-black/10";
+  return (
+    <BottomSheet open={open} onClose={onClose} label="Arrow">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
+        <div className="flex shrink-0 items-center justify-between pb-2">
+          <span
+            className="text-sm font-medium"
+            style={{ color: "var(--ink-soft)" }}
+          >
+            Arrow
+          </span>
+          <button
+            aria-label="Done editing arrow"
+            className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+            style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
+            onClick={onClose}
+          >
+            Done
+          </button>
+        </div>
+        {arrow && (
+          <>
+            <ArrowLabelInput
+              key={arrow.id}
+              id={arrow.id}
+              label={arrow.label}
+              sheet
+            />
+            <div className="pt-2.5">
+              <button
+                className={rowCls}
+                style={{ color: "var(--ink-soft)" }}
+                onClick={() => api.reverseArrow(arrow.id)}
+              >
+                ⇄ Reverse direction
+              </button>
+              {confirmDelete ? (
+                <div className="flex items-center gap-2 px-2.5 py-1.5">
+                  <span
+                    className="min-w-0 flex-1 text-[12px]"
+                    style={{ color: "var(--ink-soft)" }}
+                  >
+                    Delete this arrow?
+                  </span>
+                  <button
+                    className="min-h-10 rounded-lg px-3.5 py-2 text-xs transition-opacity active:opacity-75"
+                    style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
+                    onClick={() => api.deleteArrow(arrow.id)}
+                  >
+                    delete
+                  </button>
+                  <button
+                    className="min-h-10 rounded-lg px-3.5 py-2 text-xs active:bg-black/10"
+                    style={{ color: "var(--ink-soft)" }}
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className={rowCls}
+                  style={{ color: "var(--danger)" }}
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  Delete arrow
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </BottomSheet>
+  );
+}
+
 export function ConnectionLine({
   fromX,
   fromY,
   toX,
   toY,
+  fromPosition,
 }: ConnectionLineComponentProps) {
   const horizontal = Math.abs(toX - fromX) > Math.abs(toY - fromY);
   const [path] = getBezierPath({
     sourceX: fromX,
     sourceY: fromY,
-    sourcePosition: horizontal
-      ? toX > fromX
-        ? Position.Right
-        : Position.Left
-      : toY > fromY
-        ? Position.Bottom
-        : Position.Top,
+    // Exit from the grabbed dot's side, so the preview matches the committed
+    // arrow (which pins `data.sourceHandle`); fall back to the aim direction.
+    sourcePosition:
+      fromPosition ??
+      (horizontal
+        ? toX > fromX
+          ? Position.Right
+          : Position.Left
+        : toY > fromY
+          ? Position.Bottom
+          : Position.Top),
     targetX: toX,
     targetY: toY,
     targetPosition: horizontal
@@ -400,8 +484,8 @@ export function ConnectionLine({
         >
           <polyline
             points="-5,-4 0,0 -5,4 -5,-4"
-            fill="var(--accent)"
-            stroke="var(--accent)"
+            fill={ARROW_INK}
+            stroke={ARROW_INK}
             strokeWidth={1}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -411,7 +495,7 @@ export function ConnectionLine({
       <path
         d={path}
         fill="none"
-        stroke="var(--accent)"
+        stroke={ARROW_INK}
         strokeWidth={2}
         strokeLinecap="round"
         markerEnd="url(#parts-connect-arrow)"

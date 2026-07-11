@@ -5,7 +5,7 @@
  *
  * The main orchestrator: owns the single parts/arrows dataset, the
  * bespoke drag/magnet/camera choreography (rAF loops writing straight
- * to the DOM), undo history, tap-to-place, auto-space, save/load, and
+ * to the DOM), undo history, part spawn, auto-space, save/load, and
  * all app-level wiring. Leaf layers live in lib/ (data + pure logic),
  * hooks/ (context + media queries), and components/ (body art, cards,
  * edges, panels, sheets) — see CLAUDE.md for the module map.
@@ -35,8 +35,7 @@ import {
 } from "@xyflow/react";
 import {
   BODY_H,
-  BODY_W,
-  SCENE_W,
+  SINGLE_SCENE_W,
   STICK_RIVAL,
   STICK_RELEASE,
   AIM_ENTER_SPD,
@@ -57,7 +56,7 @@ import {
   MIN_SCALE,
   MAX_SCALE,
   PALETTE,
-  ARROW_COLORS,
+  ARROW_INK,
 } from "@/lib/tuning";
 import { REGIONS, REGION_BY_KEY } from "@/lib/regions";
 import {
@@ -69,12 +68,11 @@ import {
   type HandleSide,
 } from "@/lib/types";
 import {
-  figureCenterX,
   anchorToFlow,
   offBodySuggestion,
   nearestTarget,
   MIN_ANCHOR_GAP,
-  figureUnder,
+  overBody,
   resolveMagnet,
   nearestOffZone,
   mapExtent,
@@ -90,6 +88,7 @@ import {
   parseImportText,
 } from "@/lib/matcher";
 import { downloadMap, loadMapFile, parseMapJson } from "@/lib/persistence";
+import { downloadMapPng } from "@/lib/exports";
 import { createMap, updateMap, CloudError } from "@/lib/cloud";
 import { authClient } from "@/lib/auth-client";
 import {
@@ -99,13 +98,17 @@ import {
   readDraftJson,
   clearDraft,
 } from "@/lib/draft";
-import { sndPlay, sndSetMuted, magnetTick } from "@/lib/sound";
-import { haptic } from "@/lib/haptics";
+import { haptic, hapticTick } from "@/lib/haptics";
 import { getWelcomeSeen, setWelcomeSeen } from "@/lib/onboarding";
 import { sampleMap } from "@/lib/sample-map";
 import { partSurface, locationDisplay } from "@/lib/part-utils";
 import { panelStyle } from "@/lib/ui";
-import { AppApiContext, PartsListContext, type AppApi } from "@/hooks/use-app-api";
+import {
+  AppApiContext,
+  PartsListContext,
+  ArrowsListContext,
+  type AppApi,
+} from "@/hooks/use-app-api";
 import { useIsPhone, useReducedMotion } from "@/hooks/use-media";
 import {
   BodyOutline,
@@ -113,7 +116,7 @@ import {
 } from "@/components/body-outline";
 import { MobileEditSheet } from "@/components/part-editor";
 import { PartNode } from "@/components/part-node";
-import { FloatingEdge, ConnectionLine } from "@/components/floating-edge";
+import { FloatingEdge, ConnectionLine, ArrowEditSheet } from "@/components/floating-edge";
 import {
   LiftOverlay,
   MOVING_TARGET,
@@ -124,11 +127,17 @@ import { Toolbar, FrameMapButton } from "@/components/toolbar";
 import { PartsListPanel, PhonePartsSheet } from "@/components/parts-list";
 import { PhoneTopBar } from "@/components/phone-top-bar";
 import { PhoneQuickTools } from "@/components/phone-quick-tools";
-import { CreateSheet, ShareSheet, MoreSheet } from "@/components/phone-sheets";
+import { CreateSheet, ShareSheet, MoreSheet, RenameSheet } from "@/components/phone-sheets";
 import { ImportModal } from "@/components/import-modal";
 import { WelcomeModal } from "@/components/welcome";
 import { MyMapsModal } from "@/components/my-maps";
-import { CoachMarks, TOUR_STEPS, type TourSnapshot } from "@/components/coach-marks";
+import {
+  CoachMarks,
+  TOUR_STEPS,
+  PHONE_TOUR_STEPS,
+  type TourSnapshot,
+} from "@/components/coach-marks";
+import { useTourLock } from "@/hooks/use-tour-lock";
 
 /* ════════════════════════════════════════════════════════════════════
    9. MAIN APP
@@ -136,6 +145,14 @@ import { CoachMarks, TOUR_STEPS, type TourSnapshot } from "@/components/coach-ma
 
 const nodeTypes = { part: PartNode };
 const edgeTypes = { floating: FloatingEdge };
+
+/** One-shot keys for transient UI (notice pill, reveal glow). A monotonic
+ *  counter, never a timestamp: two transients born in the same millisecond
+ *  once shared a Date.now() key as SIBLINGS (the completion notice + the
+ *  tour-done wash), and React's duplicate-key reconciliation corrupted the
+ *  whole sibling list — the always-mounted bottom sheets included. */
+let transientSeq = 0;
+const noticeKey = () => ++transientSeq;
 
 const sameLiftTarget = (a: LiftTarget | null, b: LiftTarget): boolean =>
   !!a &&
@@ -205,26 +222,17 @@ function PartsMapApp() {
    *  map is opened / saved and when a file is loaded; "Untitled map" until
    *  then. Display-only — rename still lives in My Maps. */
   const [mapTitle, setMapTitle] = useState("Untitled map");
-  /** Which phone bottom sheet is open (create / share / more), or none.
-   *  One at a time, and never over the edit sheet or a drag/placement. */
+  /** Which phone bottom sheet is open (create / share / more / rename),
+   *  or none. One at a time, and never over the edit sheet or a
+   *  drag/placement. */
   const [phoneSheet, setPhoneSheet] = useState<
-    "create" | "share" | "more" | null
+    "create" | "share" | "more" | "rename" | null
   >(null);
   /** Set when the list sheet is opened via the top-bar search, so it can
    *  focus its filter; cleared when the list closes. */
   const [listSearchFocus, setListSearchFocus] = useState(false);
-  /** Tap-to-place: pressing Add births the part into a brief placement
-   *  mode — a ghost card follows the hand, the anchor constellation
-   *  steps forward, and one tap gives the part its home. The part is
-   *  only created at the tap; cancelling hands the name back. */
-  const [placing, setPlacing] = useState<{
-    name: string;
-    color: string;
-  } | null>(null);
-  /** Whether the placement gesture is touch (flips the label pill). */
-  const [placingTouch, setPlacingTouch] = useState(false);
-  /** The Add input's text — lives here so cancelling a placement can
-   *  restore the typed name. */
+  /** The Add input's text — lives here (not in the toolbar/sheet) so both
+   *  desktop and phone share one draft. */
   const [draft, setDraft] = useState("");
   const isPhone = useIsPhone();
   const reducedMotion = useReducedMotion();
@@ -232,6 +240,11 @@ function PartsMapApp() {
   useEffect(() => {
     isPhoneRef.current = isPhone;
   }, [isPhone]);
+  // Sheets are JS-gated by isPhone (the shell's old `sm:hidden` CSS gate
+  // disagreed with useIsPhone on ≥640px landscape phones); if the layout
+  // flips to desktop mid-session, put any open phone sheet away. Render-time
+  // adjustment, not an effect — React re-renders before committing.
+  if (!isPhone && phoneSheet !== null) setPhoneSheet(null);
   /** Quiet notice pill: transient feedback (auto-space, saved, undo…),
    *  optionally carrying a single action such as Undo. */
   const [notice, setNotice] = useState<{
@@ -255,11 +268,6 @@ function PartsMapApp() {
   const [draftEnabled, setDraftEnabledState] = useState(false);
   const { data: session } = authClient.useSession();
 
-  /** Session-only sound preference (no persistence by design). */
-  const [soundOn, setSoundOn] = useState(true);
-  useEffect(() => {
-    sndSetMuted(!soundOn);
-  }, [soundOn]);
 
   /** One-shot landing effects: card pop (via node data) + anchor ripple. */
   const [dropPop, setDropPop] = useState<{ id: string; key: number } | null>(
@@ -296,6 +304,26 @@ function PartsMapApp() {
   const [framedTick, setFramedTick] = useState(0);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const tourBaselineRef = useRef<TourSnapshot | null>(null);
+  /** Which layout's step array the running tour follows — the locked
+   *  guided flow on phone, the classic watch-only tour on desktop.
+   *  Fixed at startTour; a mid-tour layout flip ends the tour. */
+  const [tourMode, setTourMode] = useState<"phone" | "desktop" | null>(null);
+  /** Bumped when the lock guard swallows a tap, so the callout pulses. */
+  const [tourNudge, setTourNudge] = useState(0);
+  /** The one pending shepherd timer (auto-select after a landing;
+   *  auto-reselect during the link step) — cleared on step change and
+   *  tour end so a Skip never fires a ghost selection later. */
+  const tourTimerRef = useRef<number | null>(null);
+  const tourStepRef = useRef<number | null>(null);
+  useEffect(() => {
+    tourStepRef.current = tourStep;
+  }, [tourStep]);
+  /** The most recently added part — the tour's place/edit/link steps
+   *  anchor their spotlight to its card. */
+  const [lastAddedId, setLastAddedId] = useState<string | null>(null);
+  /** One-shot soft accent wash when the tour completes (calm celebration);
+   *  keyed so a re-run replays it, cleared by its own animationend. */
+  const [tourDoneKey, setTourDoneKey] = useState<number | null>(null);
   // Reading localStorage has to wait for the client (the initial render
   // must match the server's, which has no localStorage to read) — this
   // mount-only effect is the standard hydration-safe shape for that, not
@@ -308,64 +336,159 @@ function PartsMapApp() {
     setWelcomeOpen(false);
     setWelcomeSeen();
   }, []);
-  const startTour = useCallback(() => {
-    setWelcomeOpen(false);
-    setWelcomeSeen();
-    tourBaselineRef.current = {
-      partsCount: partsRef.current.length,
-      arrowsCount: arrowsRef.current.length,
-      selectedId,
-      listOpen,
-      exportMenuOpen,
-      framedTick,
-    };
-    setTourStep(0);
-  }, [selectedId, listOpen, exportMenuOpen, framedTick]);
-  const skipTour = useCallback(() => setTourStep(null), []);
+  const startTour = useCallback(
+    /** `counts` overrides the baseline for callers that just replaced the
+     *  whole map in this same tick (the "Explore an example" path) — the
+     *  refs this reads otherwise still hold the pre-load map. */
+    (counts?: { parts: number; arrows: number; onBody: number }) => {
+      setWelcomeOpen(false);
+      setWelcomeSeen();
+      // Timer hygiene lives here too, not only in endTour — a re-entry
+      // path that skips endTour must never inherit a stale auto-select.
+      if (tourTimerRef.current !== null) {
+        clearTimeout(tourTimerRef.current);
+        tourTimerRef.current = null;
+      }
+      const phone = isPhoneRef.current;
+      if (phone) {
+        // A locked step must not start buried: clear every covering
+        // surface so step 1's + button is the only thing lit — and no
+        // lingering notice action (the draft-restore "Restore" would be
+        // tappable through the lock and swap the map mid-tour).
+        setSelectedId(null);
+        setSelectedEdgeId(null);
+        setListOpen(false);
+        setPhoneSheet(null);
+        setExportMenuOpen(false);
+        setNotice(null);
+      }
+      tourBaselineRef.current = {
+        partsCount: counts?.parts ?? partsRef.current.length,
+        arrowsCount: counts?.arrows ?? arrowsRef.current.length,
+        onBodyCount:
+          counts?.onBody ??
+          partsRef.current.filter((p) => !p.offBody).length,
+        lastAddedId: null,
+        selectedId: phone ? null : selectedId,
+        listOpen: phone ? false : listOpen,
+        exportMenuOpen: phone ? false : exportMenuOpen,
+        createSheetOpen: false,
+        framedTick,
+        isPhone: phone,
+      };
+      setTourMode(phone ? "phone" : "desktop");
+      setTourStep(0);
+    },
+    [selectedId, listOpen, exportMenuOpen, framedTick],
+  );
+  /** Every way the tour stops (skip, completion, layout flip, welcome
+   *  reopening) funnels through here so the shepherd timer can never
+   *  fire a ghost selection afterwards. */
+  const endTour = useCallback(() => {
+    if (tourTimerRef.current !== null) {
+      clearTimeout(tourTimerRef.current);
+      tourTimerRef.current = null;
+    }
+    tourBaselineRef.current = null;
+    setTourStep(null);
+    setTourMode(null);
+  }, []);
+  const skipTour = endTour;
   /** The "?" button — always reopens the welcome choice, even mid-tour. */
   const reopenWelcome = useCallback(() => {
-    setTourStep(null);
+    endTour();
     setWelcomeOpen(true);
-  }, []);
+  }, [endTour]);
+  const onBodyCount = useMemo(
+    () => parts.filter((p) => !p.offBody).length,
+    [parts],
+  );
   const tourSnapshot: TourSnapshot = useMemo(
     () => ({
       partsCount: parts.length,
       arrowsCount: arrows.length,
+      onBodyCount,
+      lastAddedId,
       selectedId,
       listOpen,
       exportMenuOpen,
+      createSheetOpen: phoneSheet === "create",
       framedTick,
+      isPhone,
     }),
-    [parts.length, arrows.length, selectedId, listOpen, exportMenuOpen, framedTick],
+    [parts.length, arrows.length, onBodyCount, lastAddedId, selectedId, listOpen, exportMenuOpen, phoneSheet, framedTick, isPhone],
   );
-  // Advance (or end) the tour when the current step's real-world action
-  // has actually happened — never on a timer. A state machine over time
-  // (each step's "done" reads a baseline captured when it began) isn't
-  // expressible as a pure per-render derivation, so an effect is the
-  // right tool here, not a lint dodge.
+  // (The advance effect lives further down, after fitAll/revealPart exist —
+  // its auto-choreography drives them between steps.)
+  const tourSteps = tourMode === "phone" ? PHONE_TOUR_STEPS : TOUR_STEPS;
+  const tourStepDef = tourStep !== null ? tourSteps[tourStep] : null;
+  const tourStepId = tourStepDef?.id ?? null;
+  /** The locked guided flow is running — gates for systems that must not
+   *  move the stage or accept hardware input under it (auto-space, RF
+   *  delete key, wheel zoom, undo/redo). Ref twin for timer callbacks. */
+  const tourLocked = tourMode === "phone" && tourStep !== null;
+  const tourLockedRef = useRef(false);
   useEffect(() => {
-    if (tourStep === null) return;
-    const baseline = tourBaselineRef.current;
-    if (!baseline) return;
-    if (!TOUR_STEPS[tourStep].done(tourSnapshot, baseline)) return;
-    if (tourStep + 1 >= TOUR_STEPS.length) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTourStep(null);
-      setNotice({ text: "That's the tour — this space is yours", key: Date.now() });
-    } else {
-      tourBaselineRef.current = tourSnapshot;
-      setTourStep(tourStep + 1);
-    }
-  }, [tourStep, tourSnapshot]);
-  /** On phone the parts list is a bottom sheet tall enough to cover the
-   *  frame-map button underneath it — if satisfying the "list" step (by
-   *  opening the ⋯ menu) has already advanced the tour to "frame" while
-   *  the list is still open, showing that callout would point at a
-   *  button the user can't even see yet. Hold it back until the list
-   *  itself closes; every other step is unaffected. */
-  const tourStepId = tourStep !== null ? TOUR_STEPS[tourStep].id : null;
+    tourLockedRef.current = tourLocked;
+  }, [tourLocked]);
+  /** Which phone surface currently covers the stage (one at a time by
+   *  policy). Steps that live inside a sheet name it via `sheet()`; their
+   *  callouts show only while that sheet is the covering surface. */
+  const phoneCovering: string | null =
+    selectedId !== null
+      ? "edit"
+      : selectedEdgeId !== null
+        ? "arrow"
+        : listOpen
+          ? "list"
+          : phoneSheet;
+  /** Coach bubbles never render over the wrong surface. Locked phone
+   *  tour: a step's callout shows exactly when its own surface (or the
+   *  bare stage) is up — sheet-anchored steps ride above their sheet.
+   *  Desktop keeps the classic hold-back-behind-overlays rule. */
   const tourVisible =
-    tourStep !== null && !placing && !(listOpen && tourStepId !== "list");
+    tourStep !== null &&
+    // The callout gets out of the way of the very drag it teaches; it
+    // reappears (or the step advances) on drop.
+    !lift &&
+    (tourMode === "phone"
+      ? (tourStepDef?.sheet?.(tourSnapshot) ?? null) === phoneCovering
+      : !(listOpen && tourStepId !== "list") &&
+        !(
+          isPhone &&
+          (selectedId !== null || selectedEdgeId !== null || phoneSheet !== null) &&
+          tourStepId !== "list"
+        ));
+  /** The locked phone tour's input guard — only the current step's
+   *  target (plus Skip and the notice pill) is touchable. Detaches the
+   *  instant the tour ends; nothing in the DOM is mutated. */
+  useTourLock({
+    enabled: tourLocked,
+    allow: tourStepDef?.allow?.(tourSnapshot) ?? [],
+    scrollWithin: tourStepDef?.scrollWithin?.(tourSnapshot) ?? [],
+    onBlocked: () => {
+      setTourNudge((k) => k + 1);
+      haptic(4);
+    },
+  });
+  // A layout flip mid-tour would leave the wrong step array (and on
+  // phone, the lock) active — end the tour cleanly instead. An effect,
+  // not a render adjustment: endTour also clears the shepherd timer ref.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (tourMode !== null && (tourMode === "phone") !== isPhone) endTour();
+  }, [tourMode, isPhone, endTour]);
+  /** True while the locked tour's place steps run — onNodesChange drops
+   *  card selections then (React Flow selects on both tap and drag
+   *  start, which would summon the edit sheet over the very card being
+   *  placed); the tour engine opens the editor itself once the landing
+   *  settles. */
+  const tourSuppressSelectRef = useRef(false);
+  useEffect(() => {
+    tourSuppressSelectRef.current =
+      tourMode === "phone" &&
+      (tourStepId === "place" || tourStepId === "place2");
+  }, [tourMode, tourStepId]);
 
   /* ——— undo: a bounded snapshot history of the map (parts + arrows).
          Body scale keeps its own pill Undo; viewport and selection are
@@ -431,11 +554,15 @@ function PartsMapApp() {
   const linkHintShownRef = useRef(false);
   const maybeShowLinkHint = useCallback(() => {
     if (linkHintShownRef.current) return;
+    // Phones get no dot-drag hint: selecting a card opens the edit sheet
+    // (which has an explicit Draw-arrow field) at the same instant, and
+    // the pill would land right on the sheet's lower fields.
+    if (isPhoneRef.current) return;
     if (!(window.matchMedia?.("(pointer: coarse)").matches ?? false)) return;
     linkHintShownRef.current = true;
     setNotice({
       text: "Drag a dot on the card’s edge to link parts",
-      key: Date.now(),
+      key: noticeKey(),
     });
   }, []);
 
@@ -512,9 +639,6 @@ function PartsMapApp() {
    *  floor when relaxing back, so it never undoes a deliberate setting. */
   const manualScaleRef = useRef(1);
   const colorCountRef = useRef(0);
-  const placingRef = useRef<{ name: string; color: string } | null>(null);
-  /** Ghost card element (screen-space) — transform written per frame. */
-  const ghostRef = useRef<HTMLDivElement | null>(null);
 
   /** True once the user (or a loaded map) has taken the camera — after that
    *  we never auto-re-frame out from under them. Flipped by pane pan/zoom
@@ -522,26 +646,16 @@ function PartsMapApp() {
    *  and map load; programmatic setViewport (our own framing) never flips it. */
   const userAdjustedRef = useRef(false);
 
-  /* ——— initial camera: fit both figures side by side; on a phone-width
-         screen that leaves two tiny figures in dead margin, so frame the
-         FRONT figure comfortably instead — the Front/Back pill (and
-         pinch) reach the other one. ——— */
+  /* ——— initial camera: one body centered at flow 0,0, framed with room
+         for the side park lanes so the hidden surface's cards are visible
+         at the edges. Same on phone and desktop. ——— */
   const frameInitial = useCallback(() => {
     const el = wrapperRef.current;
     if (!el) return;
     const w = el.clientWidth;
     const h = el.clientHeight;
-    if (w < 640) {
-      const zoom = Math.min(1.1, (h * 0.82) / BODY_H, (w * 0.9) / BODY_W);
-      rf.setViewport({
-        x: w / 2 - figureCenterX("front", 1) * zoom,
-        y: h / 2,
-        zoom,
-      });
-    } else {
-      const zoom = Math.min(1.1, (h * 0.82) / BODY_H, (w * 0.92) / SCENE_W);
-      rf.setViewport({ x: w / 2, y: h / 2, zoom });
-    }
+    const zoom = Math.min(1.1, (h * 0.82) / BODY_H, (w * 0.92) / SINGLE_SCENE_W);
+    rf.setViewport({ x: w / 2, y: h / 2, zoom });
   }, [rf]);
 
   /* Frame once on mount, then RE-frame whenever the visible viewport settles
@@ -585,7 +699,7 @@ function PartsMapApp() {
     const el = wrapperRef.current;
     if (!el) return;
     const block = (e: Event) => {
-      if (liftInfoRef.current || placingRef.current) e.preventDefault();
+      if (liftInfoRef.current) e.preventDefault();
     };
     el.addEventListener("gesturestart", block, { passive: false });
     el.addEventListener("gesturechange", block, { passive: false });
@@ -595,10 +709,22 @@ function PartsMapApp() {
     };
   }, []);
 
-  /* ——— phone Front/Back pill: which figure owns the screen center, and
-         a gentle x-glide to the other one (zoom untouched — the pill
-         moves the camera, it is not a mode). ——— */
-  const [viewSide, setViewSide] = useState<Depth>("front");
+  /* ——— view: which surface is shown. One body is drawn (front OR back);
+         parts on the other surface rest in the side lanes. Authoritative +
+         persisted (MapDoc.view); flipping animates the cards between the
+         point and the lane. ——— */
+  const [view, setView] = useState<Depth>("front");
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+  // Transient per-part position override while a flip animates — the nodes
+  // memo reads it ahead of the derived position so the shown surface's
+  // cards glide to their points as the hidden ones slide to the lanes.
+  const [viewAnim, setViewAnim] = useState<Map<string, XYPosition> | null>(
+    null,
+  );
+  const viewAnimRafRef = useRef(0);
   const glideRafRef = useRef(0);
   /** Glide the camera to a viewport with an easeOutCubic tween; reduced
    *  motion jumps straight there. One glide at a time — a new call (or a
@@ -632,34 +758,55 @@ function PartsMapApp() {
     },
     [rf],
   );
-  const onMove = useCallback((_: unknown, vp: Viewport) => {
-    const el = wrapperRef.current;
-    if (!el) return;
-    const cx = (el.clientWidth / 2 - vp.x) / (vp.zoom || 1);
-    // The figures' midline is flow x = 0 at every body scale.
-    setViewSide(cx > 0 ? "back" : "front");
-  }, []);
   /* A real source event means the user grabbed the canvas (pan/pinch/zoom) —
      programmatic setViewport (our framing/glides) passes null. Once they've
      taken the camera, the auto-re-frame stands down. */
   const onMoveStart = useCallback((e: unknown) => {
     if (e) userAdjustedRef.current = true;
   }, []);
-  const jumpToFigure = useCallback(
-    (depth: Depth) => {
-      const el = wrapperRef.current;
-      if (!el) return;
-      const vp = rf.getViewport();
-      glideViewport({
-        x:
-          el.clientWidth / 2 -
-          figureCenterX(depth, bodyScaleRef.current) * vp.zoom,
-        y: vp.y,
-        zoom: vp.zoom,
-      });
-    },
-    [rf, glideViewport],
-  );
+
+  /** Flip the shown surface: every on-body card glides between its point on
+   *  the body and its parked spot in the side lane (reduced motion jumps).
+   *  The camera doesn't move — the body stays centered, only the cards
+   *  travel. A re-flip mid-glide restarts cleanly. */
+  const flipView = useCallback((next: Depth) => {
+    const prev = viewRef.current;
+    if (next === prev) return;
+    const scale = bodyScaleRef.current;
+    const from = derivePositions(partsRef.current, scale, prev);
+    const to = derivePositions(partsRef.current, scale, next);
+    const movers = partsRef.current.filter(
+      (p) => !p.offBody && from.get(p.id) && to.get(p.id),
+    );
+    cancelAnimationFrame(viewAnimRafRef.current);
+    setView(next);
+    const reduced =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (reduced || movers.length === 0) {
+      setViewAnim(null);
+      return;
+    }
+    // Seed at the FROM positions so the flip render doesn't snap to the
+    // destination before the first animation frame.
+    const seed = new Map<string, XYPosition>();
+    for (const p of movers) seed.set(p.id, from.get(p.id)!);
+    setViewAnim(seed);
+    const D = 360;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / D);
+      const e = easeInOutCubic(t);
+      const m = new Map<string, XYPosition>();
+      for (const p of movers) {
+        const a = from.get(p.id)!;
+        const b = to.get(p.id)!;
+        m.set(p.id, { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e });
+      }
+      setViewAnim(t < 1 ? m : null);
+      if (t < 1) viewAnimRafRef.current = requestAnimationFrame(step);
+    };
+    viewAnimRafRef.current = requestAnimationFrame(step);
+  }, []);
 
   /** The list's "where is it?" gesture: glide the camera to a part and
    *  give its card a soft two-breath halo. */
@@ -672,9 +819,13 @@ function PartsMapApp() {
       if (!el) return;
       const p = partsRef.current.find((q) => q.id === id);
       if (!p) return;
+      // Reveal a hidden-surface part by first flipping to its side.
+      const surface = partSurface(p);
+      if (!p.offBody && surface !== viewRef.current) flipView(surface);
+      const shown = p.offBody ? viewRef.current : surface;
       const pos = p.offBody
         ? p.freePos
-        : derivePositions(partsRef.current, bodyScaleRef.current).get(id);
+        : derivePositions(partsRef.current, bodyScaleRef.current, shown).get(id);
       if (!pos) return;
       const vp = rf.getViewport();
       // Come no closer than a readable zoom; never zoom out to do it.
@@ -684,20 +835,15 @@ function PartsMapApp() {
         y: el.clientHeight / 2 - pos.y * zoom,
         zoom,
       });
-      setReveal({ id, key: Date.now() });
+      setReveal({ id, key: noticeKey() });
     },
-    [rf, glideViewport],
+    [rf, glideViewport, flipView],
   );
 
-  /** Frame the whole map: both figures plus any off-body strays — the
-   *  app's "home"/reset view on every screen size (an optional parts
-   *  array lets a just-committed import frame itself before the ref
-   *  catches up). Phone used to frame the front figure alone here; that
-   *  read as a dead end once the canvas gained real pan bounds (below),
-   *  so it now matches desktop and the Front/Back pill remains the way
-   *  to zoom into one figure. The *initial* camera effect above keeps
-   *  its own front-figure framing deliberately — first open is a
-   *  different moment than "take me home". */
+  /** Frame the whole map: the single body plus its park lanes and any
+   *  off-body strays — the app's "home"/reset view on every screen size
+   *  (an optional parts array lets a just-committed import frame itself
+   *  before the ref catches up). */
   const fitAll = useCallback(
     (partsArr?: Part[]) => {
       const el = wrapperRef.current;
@@ -706,9 +852,9 @@ function PartsMapApp() {
       const h = el.clientHeight;
       const s = bodyScaleRef.current;
       const list = partsArr ?? partsRef.current;
-      // The two-figure scene (gap included) scales linearly about flow 0,0.
-      let minX = (-SCENE_W * s) / 2;
-      let maxX = (SCENE_W * s) / 2;
+      // The single body + its side park lanes scale linearly about flow 0,0.
+      let minX = (-SINGLE_SCENE_W * s) / 2;
+      let maxX = (SINGLE_SCENE_W * s) / 2;
       let minY = (-BODY_H * s) / 2;
       let maxY = (BODY_H * s) / 2;
       for (const p of list) {
@@ -733,6 +879,167 @@ function PartsMapApp() {
     [glideViewport],
   );
 
+  // Advance (or end) the tour when the current step's real-world action
+  // has actually happened — never on a timer. A state machine over time
+  // (each step's "done" reads a baseline captured when it began) isn't
+  // expressible as a pure per-render derivation, so an effect is the
+  // right tool here, not a lint dodge. Lives below fitAll/revealPart
+  // because the between-step choreography drives them.
+  useEffect(() => {
+    if (tourStep === null) return;
+    const baseline = tourBaselineRef.current;
+    const def = tourSteps[tourStep];
+    if (!baseline || !def) return;
+    const clearShepherd = () => {
+      if (tourTimerRef.current !== null) {
+        clearTimeout(tourTimerRef.current);
+        tourTimerRef.current = null;
+      }
+    };
+    if (def.done(tourSnapshot, baseline)) {
+      clearShepherd();
+      if (tourStep + 1 >= tourSteps.length) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTourStep(null);
+        setTourMode(null);
+        tourBaselineRef.current = null;
+        // Calm completion: frame the whole map, a soft accent wash, a
+        // gentle buzz — then the space is theirs.
+        fitAll();
+        haptic(12);
+        // The wash only mounts when motion is allowed — setting the key under
+        // reduced motion would leave it stuck (its reset is the wash's own
+        // animationend).
+        if (!reducedMotion) setTourDoneKey(Date.now());
+        setNotice({ text: "That's the tour — this space is yours", key: noticeKey(), ttlMs: 6000 });
+      } else {
+        // Auto-choreography between steps: for the place steps, frame the
+        // WHOLE stage (fresh card AND the body it's headed for — centering
+        // just the card pushed the body off a narrow screen) and glow the
+        // card; put the list AND its options page away before the frame
+        // step so its callout isn't buried under the sheet; scroll the
+        // link step's connect field into view once the edit sheet's slide
+        // settles (it can sit below the fold on short screens).
+        const nextId = tourSteps[tourStep + 1].id;
+        if (
+          (nextId === "place" || nextId === "place2") &&
+          tourSnapshot.lastAddedId
+        ) {
+          fitAll();
+          setReveal({ id: tourSnapshot.lastAddedId, key: noticeKey() });
+        }
+        if (nextId === "frame") {
+          setListOpen(false);
+          setExportMenuOpen(false);
+        }
+        if (nextId === "link") {
+          window.setTimeout(() => {
+            // Scroll ONLY the edit sheet's own scroller — scrollIntoView
+            // walks every scrollable ancestor, and the parked bottom
+            // sheets (translated below the h-dvh stage) give the document
+            // scroll range: it dragged the whole page down and left every
+            // sheet marooned mid-screen from this step onward.
+            const field = document.querySelector<HTMLElement>(
+              '[data-tour="connect"]',
+            );
+            const scroller = field?.closest<HTMLElement>(".overflow-y-auto");
+            if (!field || !scroller) return;
+            const f = field.getBoundingClientRect();
+            const s = scroller.getBoundingClientRect();
+            scroller.scrollBy({
+              top: f.top - s.top - (s.height - f.height) / 2,
+              behavior: reducedMotion ? "auto" : "smooth",
+            });
+          }, 450);
+        }
+        tourBaselineRef.current = tourSnapshot;
+        setTourStep(tourStep + 1);
+      }
+      return;
+    }
+    /* Locked phone flow only below: regression + shepherding. */
+    if (tourMode !== "phone") return;
+    if (def.regress?.(tourSnapshot, baseline)) {
+      // The step's action came undone (the create sheet was dismissed
+      // without naming) — step back and re-baseline so forward works.
+      clearShepherd();
+      tourBaselineRef.current = tourSnapshot;
+      setTourStep(Math.max(0, tourStep - 1));
+      return;
+    }
+    if (lift) {
+      // Mid-drag any pending auto-select is stale (the card may land
+      // somewhere new, or off the body) — drop it; the next settle
+      // re-schedules.
+      clearShepherd();
+      return;
+    }
+    if (def.id === "place" || def.id === "place2") {
+      if (
+        tourSnapshot.selectedId !== null &&
+        tourSnapshot.onBodyCount === baseline.onBodyCount
+      ) {
+        // Keep-clear backstop: a selection before the landing would bury
+        // the drag target under the edit sheet, whose dismissal this step
+        // doesn't allow (onNodesChange suppresses these at the source).
+        setSelectedId(null);
+        return;
+      }
+      if (
+        tourSnapshot.onBodyCount > baseline.onBodyCount &&
+        tourSnapshot.selectedId === null &&
+        tourTimerRef.current === null
+      ) {
+        // The landing is down — once the settle glide and landing pop
+        // finish, open the editor (the tour-only exception to the
+        // no-auto-select-on-phone rule). Re-verified at fire time: the
+        // step may have changed, or the card may have been dragged off
+        // the body again.
+        const stepAtSchedule = tourStep;
+        const targetId = tourSnapshot.lastAddedId;
+        tourTimerRef.current = window.setTimeout(() => {
+          tourTimerRef.current = null;
+          if (tourStepRef.current !== stepAtSchedule) return;
+          const part = partsRef.current.find((p) => p.id === targetId);
+          if (!part || part.offBody) return;
+          // Programmatic selection bypasses the one-sheet-at-a-time policy
+          // in the RF select handlers — enforce it here too.
+          setListOpen(false);
+          setPhoneSheet(null);
+          setSelectedId(targetId);
+        }, 620);
+      }
+      return;
+    }
+    if (
+      def.id === "link" &&
+      tourSnapshot.selectedId === null &&
+      tourTimerRef.current === null
+    ) {
+      // The link step needs its edit sheet up — recover a stray deselect
+      // (Escape, mostly) by quietly reselecting the second part.
+      const stepAtSchedule = tourStep;
+      const targetId = tourSnapshot.lastAddedId;
+      tourTimerRef.current = window.setTimeout(() => {
+        tourTimerRef.current = null;
+        if (tourStepRef.current !== stepAtSchedule) return;
+        if (!targetId || !partsRef.current.some((p) => p.id === targetId))
+          return;
+        // Same one-sheet policy as the RF select handlers (see above).
+        setListOpen(false);
+        setPhoneSheet(null);
+        setSelectedId(targetId);
+      }, 400);
+    }
+  }, [tourStep, tourSteps, tourMode, tourSnapshot, lift, fitAll, reducedMotion]);
+  // Unmount safety for the shepherd timer.
+  useEffect(
+    () => () => {
+      if (tourTimerRef.current !== null) clearTimeout(tourTimerRef.current);
+    },
+    [],
+  );
+
   useEffect(
     () => () => {
       cancelAnimationFrame(liftRafRef.current);
@@ -740,6 +1047,7 @@ function PartsMapApp() {
       cancelAnimationFrame(scaleRafRef.current);
       cancelAnimationFrame(restoreRafRef.current);
       cancelAnimationFrame(glideRafRef.current);
+      cancelAnimationFrame(viewAnimRafRef.current);
     },
     [],
   );
@@ -774,6 +1082,7 @@ function PartsMapApp() {
   const undo = useCallback(() => {
     const snap = historyRef.current.pop();
     if (!snap) return;
+    haptic(4); // confirm tick — undo is a rescue, it should answer the hand
     // Bank the current (post-action) state so redo can return to it.
     redoRef.current.push({
       parts: partsRef.current,
@@ -790,7 +1099,7 @@ function PartsMapApp() {
     setSelectedId(null);
     setSelectedEdgeId(null);
     autoArmedRef.current = false;
-    setNotice({ text: `Undid — ${snap.label}`, key: Date.now() });
+    setNotice({ text: `Undid — ${snap.label}`, key: noticeKey() });
     setCanUndo(historyRef.current.length > 0);
     setUndoLabel(historyRef.current[historyRef.current.length - 1]?.label ?? null);
     setCanRedo(true);
@@ -802,6 +1111,7 @@ function PartsMapApp() {
   const redo = useCallback(() => {
     const snap = redoRef.current.pop();
     if (!snap) return;
+    haptic(4); // same confirm tick as undo
     historyRef.current.push({
       parts: partsRef.current,
       arrows: arrowsRef.current,
@@ -818,7 +1128,7 @@ function PartsMapApp() {
     setSelectedEdgeId(null);
     autoArmedRef.current = false;
     markDirty();
-    setNotice({ text: `Redid — ${snap.label}`, key: Date.now() });
+    setNotice({ text: `Redid — ${snap.label}`, key: noticeKey() });
     setCanRedo(redoRef.current.length > 0);
     setRedoLabel(redoRef.current[redoRef.current.length - 1]?.label ?? null);
     setCanUndo(true);
@@ -833,7 +1143,7 @@ function PartsMapApp() {
       opts?: {
         /** Lift/tilt state at release — relaxed to rest over the glide. */
         putDown?: { lag: number; theta: number; liftAmt: number };
-        /** Landing effects (pop, ripple, sound, haptic) — touchdown only. */
+        /** Landing effects (pop, ripple, haptic) — touchdown only. */
         onLand?: () => void;
       },
     ) => {
@@ -843,8 +1153,8 @@ function PartsMapApp() {
         false
       ) {
         // Land instantly at the anchor — no glide, no put-down relax —
-        // but the touchdown effects (pop, ripple, sound, haptic) still
-        // fire, same as they would at the end of a normal glide.
+        // but the touchdown effects (pop, ripple, haptic) still fire,
+        // same as they would at the end of a normal glide.
         const el = innerElsRef.current.get(id);
         if (el) {
           el.style.transform = "";
@@ -925,23 +1235,15 @@ function PartsMapApp() {
       const phone = !!el && el.clientWidth < 640;
       const vp0 = rf.getViewport();
       const z0 = vp0.zoom || 1;
-      const w = el?.clientWidth ?? 0;
-      const side: Depth = (w / 2 - vp0.x) / z0 > 0 ? "back" : "front";
-      // Screen x the framed figure's center must hold through the tween.
-      const sx = figureCenterX(side, from) * z0 + vp0.x;
+      // The single body is centered at flow 0, whose screen position is
+      // (vp0.x, vp0.y) at every zoom — hold it while the zoom compensates
+      // 1/scale, so the body keeps its screen size as it rescales.
       if (
         window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
         false
       ) {
         setBodyScale(to);
-        if (phone) {
-          const z = z0 * (from / to);
-          rf.setViewport({
-            x: sx - figureCenterX(side, to) * z,
-            y: vp0.y,
-            zoom: z,
-          });
-        }
+        if (phone) rf.setViewport({ x: vp0.x, y: vp0.y, zoom: z0 * (from / to) });
         return;
       }
       const start = performance.now();
@@ -950,16 +1252,7 @@ function PartsMapApp() {
         const t = Math.min(1, (now - start) / D);
         const s = from + (to - from) * easeInOutCubic(t);
         setBodyScale(s);
-        if (phone) {
-          const z = z0 * (from / s);
-          rf.setViewport({
-            x: sx - figureCenterX(side, s) * z,
-            // Figures are vertically centered on flow y = 0, which sits
-            // at screen y = vp.y at every zoom — hold it.
-            y: vp0.y,
-            zoom: z,
-          });
-        }
+        if (phone) rf.setViewport({ x: vp0.x, y: vp0.y, zoom: z0 * (from / s) });
         if (t < 1) scaleRafRef.current = requestAnimationFrame(step);
       };
       scaleRafRef.current = requestAnimationFrame(step);
@@ -1071,21 +1364,21 @@ function PartsMapApp() {
       }
       if (!aim.aiming) stickRef.current = null;
 
-      // Nearest anchor across both figures; over a figure but outside
-      // every capture radius, stay magnetic to that figure's anchors.
-      // This resolution runs every frame — transit or aim — so a release
-      // always lands on the truth under the hand.
-      const res = resolveMagnet(steer, scale);
+      // Nearest anchor on the shown surface; over the body but outside
+      // every capture radius, stay magnetic to it. This resolution runs
+      // every frame — transit or aim — so a release always lands on the
+      // truth under the hand.
+      const res = resolveMagnet(steer, scale, viewRef.current);
       let near = res.near;
       let hit = res.hit;
       const snapR = res.snapR;
       // The touch offset can push the steer point past the extremities
-      // (crown, feet); if it misses but the card itself is on a figure,
+      // (crown, feet); if it misses but the card itself is on the body,
       // target from the card instead of falling into off-body mode.
       if (!hit && info.isTouch) {
-        const fig = figureUnder(card, scale);
-        const nc = nearestTarget(card, scale, fig ?? undefined);
-        if (nc && (nc.dist < snapR || fig)) {
+        const over = overBody(card, scale);
+        const nc = nearestTarget(card, scale, viewRef.current);
+        if (nc && (nc.dist < snapR || over)) {
           near = nc;
           hit = true;
         }
@@ -1105,7 +1398,7 @@ function PartsMapApp() {
           if (sd < snapR * STICK_RELEASE && near.dist > sd * STICK_RIVAL) {
             near = { region: sr, depth: stick.depth, dist: sd };
           } else {
-            magnetTick(aim, 4); // the grip hands over — a soft tick
+            hapticTick(aim, 4); // the grip hands over — a soft tick
           }
         }
       }
@@ -1131,7 +1424,7 @@ function PartsMapApp() {
       lastTargetRef.current = { target, pos: landing };
       // Slowing back down over a region commits it — one soft tick.
       if (aim.aiming && !wasAiming && target.kind === "region") {
-        magnetTick(aim, 3);
+        hapticTick(aim, 3);
       }
       // Transit shows only a quiet dot trailing the hand; aiming shows
       // the resolved target. Discrete changes only — the singletons
@@ -1151,12 +1444,11 @@ function PartsMapApp() {
       if (follow && !follow.reduced && ps && wrapEl) {
         // Spatial hysteresis: a slim pad engages, a wider one releases —
         // no flapping while skirting the silhouette's edge.
-        follow.near =
-          figureUnder(
-            steer,
-            scale,
-            follow.near ? FOLLOW_EXIT_PAD : FOLLOW_ENTER_PAD,
-          ) !== null;
+        follow.near = overBody(
+          steer,
+          scale,
+          follow.near ? FOLLOW_EXIT_PAD : FOLLOW_ENTER_PAD,
+        );
         const followZoom = Math.min(
           Math.max(FOLLOW_GAP_PX / (MIN_ANCHOR_GAP * scale), FOLLOW_MIN),
           follow.phone ? FOLLOW_MAX_PHONE : FOLLOW_MAX,
@@ -1370,7 +1662,7 @@ function PartsMapApp() {
             pos: { ...node.position },
           };
         } else {
-          const { near, hit } = resolveMagnet(node.position, scale);
+          const { near, hit } = resolveMagnet(node.position, scale, viewRef.current);
           if (hit && near) {
             const a = anchorToFlow(near.region, near.depth, scale);
             centerRef.current.seedSnapped = true;
@@ -1404,7 +1696,6 @@ function PartsMapApp() {
         inner.style.transition =
           "box-shadow 180ms cubic-bezier(0.33, 1, 0.68, 1)";
       }
-      sndPlay("lift");
       haptic(6);
       // A drag takes over the stage: close any open phone sheet so it
       // can't cover the landing or resurface when the drag ends.
@@ -1496,7 +1787,6 @@ function PartsMapApp() {
           ),
         );
         setDragOverride(null);
-        sndPlay("free");
         haptic(6);
       } else {
         // On-body: the drop always lands on the targeted anchor — the
@@ -1510,7 +1800,7 @@ function PartsMapApp() {
             : p,
         );
         setParts(updated);
-        const to = derivePositions(updated, bodyScaleRef.current).get(info.id);
+        const to = derivePositions(updated, bodyScaleRef.current, viewRef.current).get(info.id);
         if (to) {
           settleTween(info.id, dropPos, to, {
             putDown,
@@ -1518,7 +1808,6 @@ function PartsMapApp() {
               const now = Date.now();
               setDropPop({ id: info.id, key: now });
               setRipple({ pos: to, key: now });
-              sndPlay("drop");
               haptic(8);
             },
           });
@@ -1587,7 +1876,7 @@ function PartsMapApp() {
           // behaves) and an off-body part moves freely.
           const pos = ch.position;
           const scale = bodyScaleRef.current;
-          const { near, hit } = resolveMagnet(pos, scale);
+          const { near, hit } = resolveMagnet(pos, scale, viewRef.current);
           pushHistory(`move:${ch.id}`, "move");
           setParts((ps) =>
             ps.map((p) =>
@@ -1606,17 +1895,21 @@ function PartsMapApp() {
           );
         }
       } else if (ch.type === "select") {
-        setSelectedId((prev) =>
-          ch.selected ? ch.id : prev === ch.id ? null : prev,
-        );
-        if (ch.selected) {
-          maybeShowLinkHint();
-          // One sheet at a time on phones: selecting a card summons the
-          // edit sheet, so the list and any create/share/more sheet step
-          // aside first.
-          if (isPhoneRef.current) {
-            setListOpen(false);
-            setPhoneSheet(null);
+        // The locked tour's place steps own selection (see
+        // tourSuppressSelectRef) — drop selects, keep deselects.
+        if (!(ch.selected && tourSuppressSelectRef.current)) {
+          setSelectedId((prev) =>
+            ch.selected ? ch.id : prev === ch.id ? null : prev,
+          );
+          if (ch.selected) {
+            maybeShowLinkHint();
+            // One sheet at a time on phones: selecting a card summons the
+            // edit sheet, so the list and any create/share/more sheet step
+            // aside first.
+            if (isPhoneRef.current) {
+              setListOpen(false);
+              setPhoneSheet(null);
+            }
           }
         }
       } else if (ch.type === "remove") {
@@ -1655,9 +1948,13 @@ function PartsMapApp() {
         setSelectedEdgeId((prev) =>
           ch.selected ? ch.id : prev === ch.id ? null : prev,
         );
-        // The arrow editor lives at canvas level — don't leave it buried
-        // under the phone list sheet.
-        if (ch.selected && isPhoneRef.current) setListOpen(false);
+        // One sheet at a time on phones: selecting an arrow summons its
+        // edit sheet, so the list and any create/share/more sheet step
+        // aside first.
+        if (ch.selected && isPhoneRef.current) {
+          setListOpen(false);
+          setPhoneSheet(null);
+        }
       } else if (ch.type === "remove") {
         pushHistory(`arrow-delete:${ch.id}`, "arrow removed");
         setArrows((as) => as.filter((a) => a.id !== ch.id));
@@ -1675,7 +1972,7 @@ function PartsMapApp() {
           id: newId("arrow"),
           sourceId: conn.source,
           targetId: conn.target,
-          color: ARROW_COLORS[0],
+          color: ARROW_INK,
           // The specific dot dragged from, so the edge can exit from that
           // fixed side instead of recomputing one from geometry alone (see
           // FloatingEdge). The target has no equivalent — see the Arrow
@@ -1683,6 +1980,7 @@ function PartsMapApp() {
           sourceHandle: conn.sourceHandle as HandleSide | undefined,
         },
       ]);
+      haptic(6); // creating a relationship buzzes like creating a part
     },
     [pushHistory],
   );
@@ -1712,6 +2010,40 @@ function PartsMapApp() {
         setSelectedId((prev) => (prev === id ? null : prev));
         // Removals free up room — let auto-space ease the body back.
         autoArmedRef.current = true;
+      },
+      duplicatePart: (id) => {
+        const src = partsRef.current.find((p) => p.id === id);
+        if (!src) return;
+        const scale = bodyScaleRef.current;
+        // Clone as a free-floating copy offset from where the original
+        // currently renders, so it never stacks on the same anchor.
+        const from =
+          derivePositions(partsRef.current, scale, viewRef.current).get(id) ??
+          src.freePos;
+        const pos = { x: from.x + 30, y: from.y + 30 };
+        const cid = newId("part");
+        pushHistory(`add:${cid}`, `duplicated “${src.name}”`);
+        const clone: Part = {
+          ...src,
+          id: cid,
+          offBody: true,
+          depth: "front",
+          freePos: pos,
+          location: nearestOffZone(pos, scale),
+          locked: undefined, // a fresh copy starts unlocked, ready to drag
+        };
+        setParts((ps) => [...ps, clone]);
+        // The newest part is now the clone — tour steps and anything else
+        // anchoring to "the most recently added card" must follow it.
+        setLastAddedId(cid);
+        autoArmedRef.current = true;
+        // Desktop: select the copy so its toolbar appears. Phone: the sheet
+        // closes on duplicate, so a notice confirms the copy landed.
+        if (isPhoneRef.current) {
+          setNotice({ text: `Duplicated “${src.name}”`, key: noticeKey() });
+        } else {
+          setSelectedId(cid);
+        }
       },
       setLocationText: (id, text) => {
         const m = matchRegion(text);
@@ -1743,8 +2075,8 @@ function PartsMapApp() {
             ? { ...p, offBody: false, location: m.key, depth: m.depth }
             : p,
         );
-        const from = derivePositions(partsRef.current, scale).get(id);
-        const to = derivePositions(updated, scale).get(id);
+        const from = derivePositions(partsRef.current, scale, viewRef.current).get(id);
+        const to = derivePositions(updated, scale, viewRef.current).get(id);
         setParts(updated);
         if (from && to && (from.x !== to.x || from.y !== to.y)) {
           settleTween(id, from, to);
@@ -1758,8 +2090,8 @@ function PartsMapApp() {
         const updated = partsRef.current.map((p) =>
           p.id === id ? { ...p, depth } : p,
         );
-        const from = derivePositions(partsRef.current, scale).get(id);
-        const to = derivePositions(updated, scale).get(id);
+        const from = derivePositions(partsRef.current, scale, viewRef.current).get(id);
+        const to = derivePositions(updated, scale, viewRef.current).get(id);
         setParts(updated);
         if (from && to && (from.x !== to.x || from.y !== to.y)) {
           settleTween(id, from, to);
@@ -1797,13 +2129,16 @@ function PartsMapApp() {
         } else {
           // Location is authoritative: the resized card re-centers on its
           // anchor with the same settle motion as a drop.
-          const to = derivePositions(updated, bodyScaleRef.current).get(id);
+          const to = derivePositions(updated, bodyScaleRef.current, viewRef.current).get(id);
           if (to) settleTween(id, center, to);
           else setDragOverride(null);
         }
         autoArmedRef.current = true;
       },
       updateArrow: (id, patch) => {
+        // A deleted arrow's label field flushes on unmount — that flush
+        // must not push a junk history entry for a ghost arrow.
+        if (!arrowsRef.current.some((a) => a.id === id)) return;
         pushHistory(
           `arrow-edit:${id}:${Object.keys(patch).join(",")}`,
           "label" in patch ? "arrow label" : "arrow style",
@@ -1813,7 +2148,7 @@ function PartsMapApp() {
         );
       },
       connectParts: (sourceId, targetId) => {
-        if (!sourceId || !targetId || sourceId === targetId) return;
+        if (!sourceId || !targetId || sourceId === targetId) return false;
         // No sourceHandle: a keyboard/menu link has no dragged-from dot, so
         // FloatingEdge falls back to its dynamic geometry on both ends.
         // Skip an exact duplicate so the picker can't silently stack a
@@ -1823,7 +2158,7 @@ function PartsMapApp() {
             (a) => a.sourceId === sourceId && a.targetId === targetId,
           )
         ) {
-          return;
+          return false;
         }
         pushHistory("arrow-add", "arrow");
         setArrows((as) => [
@@ -1832,9 +2167,11 @@ function PartsMapApp() {
             id: newId("arrow"),
             sourceId,
             targetId,
-            color: ARROW_COLORS[0],
+            color: ARROW_INK,
           },
         ]);
+        haptic(6); // creating a relationship buzzes like creating a part
+        return true;
       },
       reverseArrow: (id) => {
         pushHistory(`arrow-reverse:${id}`, "arrow reversed");
@@ -1866,264 +2203,110 @@ function PartsMapApp() {
         if (el) innerElsRef.current.set(id, el);
         else innerElsRef.current.delete(id);
       },
+      noticeBlockedDrag: (id) => {
+        const p = partsRef.current.find((q) => q.id === id);
+        if (!p) return;
+        haptic(3); // refusal tick — same register as the other put-downs
+        setNotice(
+          p.locked
+            ? {
+                text: "Locked — unlock it in its editor to move it",
+                key: noticeKey(),
+              }
+            : {
+                text: `It's on the ${partSurface(p)} — flip the view to move it`,
+                key: noticeKey(),
+              },
+        );
+      },
     }),
     [rf, settleTween, pushHistory],
   );
 
-  /* ——— creation: tap-to-place ——— */
+  /* ——— creation: spawn onto the staging shelf below the body ——— */
 
-  /** Add pressed: enter placement mode. The part is NOT created yet —
-   *  the name and its would-be color ride along as a ghost until the
-   *  tap. Pressing Add again with a new name simply replaces the ghost. */
-  const beginPlacing = useCallback((name: string) => {
-    const info = {
-      name,
-      color: PALETTE[colorCountRef.current % PALETTE.length],
-    };
-    placingRef.current = info;
-    // Put any phone sheet away so the ghost + landing are never covered,
-    // and so a stale sheet can't resurface when placement ends.
-    setPhoneSheet(null);
-    setPlacing(info);
-    setPlacingTouch(false);
-    sndPlay("lift");
-    haptic(6);
-  }, []);
-
-  /** Leave placement mode without creating anything — the typed name
-   *  goes back into the input, nothing is lost. */
-  const cancelPlacing = useCallback(() => {
-    const info = placingRef.current;
-    if (!info) return;
-    placingRef.current = null;
-    setPlacing(null);
-    setDraft(info.name);
-  }, []);
-
-  /** The tap gives the part its home: on/near a figure it lands on the
-   *  nearest anchor with the full landing choreography (glide, pop,
-   *  ripple, thump); on open canvas it settles off-body right there. */
-  const placePart = useCallback(
-    (client: XYPosition) => {
-      const info = placingRef.current;
-      if (!info) return;
-      placingRef.current = null;
-      setPlacing(null);
+  /** Add: create the part immediately as a free-floating (off-body) card on
+   *  a staging shelf just below the figure's feet — the same fanned grid the
+   *  import fallback uses — then the person drags it up onto the body (full
+   *  lift/magnet/settle choreography). This replaces the old center-spawn,
+   *  which dropped cards at ±edgeX right on top of the hidden surface's
+   *  parked cards and stacked them at the torso midline. The shelf fans
+   *  across three columns (no stacking) and is clear of the side park lanes;
+   *  a gentle reveal-glide keeps it on-screen when it lands out of view. */
+  const spawnCountRef = useRef(0);
+  const spawnPart = useCallback(
+    (name: string) => {
       const scale = bodyScaleRef.current;
-      const flow = rf.screenToFlowPosition(client);
+      const el = wrapperRef.current;
+      const vp = rf.getViewport();
+      const zoom = vp.zoom || 1;
+      const cw = el?.clientWidth ?? 0;
+      const ch = el?.clientHeight ?? 0;
+      // Wrap the shelf index so a long run of adds cycles across the same
+      // few rows instead of marching off down the canvas forever.
+      const pos = freeSpawnGrid(spawnCountRef.current++ % 12, scale);
+
       const id = newId("part");
-      pushHistory(`add:${id}`, `added “${info.name}”`);
-      colorCountRef.current++;
-      const base = {
+      pushHistory(`add:${id}`, `added “${name}”`);
+      const part: Part = {
         id,
-        name: info.name,
-        color: info.color,
-        fontSize: "m" as const,
+        name,
+        color: PALETTE[colorCountRef.current++ % PALETTE.length],
+        fontSize: "m",
         bold: false,
-        shape: "rounded" as const,
+        shape: "rounded",
+        location: nearestOffZone(pos, scale),
+        depth: "front",
+        offBody: true,
+        freePos: pos,
       };
-      const { near, hit } = resolveMagnet(flow, scale);
-      if (hit && near) {
-        const part: Part = {
-          ...base,
-          location: near.region.key,
-          depth: near.depth,
-          offBody: false,
-          freePos: flow,
-        };
-        const updated = [...partsRef.current, part];
-        setParts(updated);
-        // First paint at the tap point (same batch as the part itself),
-        // then the settle glides it onto its anchor — landing effects at
-        // touchdown, exactly like a drop.
-        setDragOverride({ id, pos: flow });
-        const to = derivePositions(updated, scale).get(id);
-        if (to) {
-          settleTween(id, flow, to, {
-            onLand: () => {
-              const now = Date.now();
-              setDropPop({ id, key: now });
-              setRipple({ pos: to, key: now });
-              sndPlay("drop");
-              haptic(8);
-            },
-          });
-        } else {
-          setDragOverride(null);
-        }
-      } else {
-        const part: Part = {
-          ...base,
-          location: nearestOffZone(flow, scale),
-          depth: "front",
-          offBody: true,
-          freePos: flow,
-        };
-        setParts((ps) => [...ps, part]);
-        sndPlay("free");
-        haptic(6);
-      }
-      // Desktop: select so the popover is ready. Phone: stay hands-off —
-      // auto-opening the edit sheet would bury the landing it just made.
-      if (!isPhoneRef.current) setSelectedId(id);
+      setParts((ps) => [...ps, part]);
       autoArmedRef.current = true;
+      haptic(6);
+
+      // Keep the shelf on-screen: if the fresh card falls outside the
+      // current viewport, glide (keeping the current zoom) so it rests
+      // comfortably in the lower third — but never reframe when it's
+      // already visible, which would read as a jarring jump.
+      const halfW = (part.w ?? 160) / 2 + 30;
+      const halfH = (part.h ?? 48) / 2 + 30;
+      const inView =
+        cw > 0 &&
+        ch > 0 &&
+        pos.x - halfW >= (0 - vp.x) / zoom &&
+        pos.x + halfW <= (cw - vp.x) / zoom &&
+        pos.y - halfH >= (0 - vp.y) / zoom &&
+        pos.y + halfH <= (ch - vp.y) / zoom;
+      if (!inView && cw > 0 && ch > 0) {
+        glideViewport({
+          x: cw / 2 - pos.x * zoom,
+          y: ch * 0.62 - pos.y * zoom,
+          zoom,
+        });
+      }
+
+      setLastAddedId(id);
+
+      // Desktop: select so the new toolbar is ready. Phone: stay hands-off
+      // (the edit sheet would bury it) and nudge the person to drag it —
+      // unless the tour is running, whose "place" step owns that
+      // instruction (two competing texts at once read as noise).
+      if (isPhoneRef.current) {
+        if (tourStep === null) {
+          setNotice({
+            text: `Added “${name}” — drag it onto the body`,
+            key: noticeKey(),
+          });
+        }
+      } else if (tourStep === null) {
+        // During onboarding, let the person tap the new card themselves so
+        // the "open its editor" step stays performable — auto-select would
+        // satisfy it instantly and skip the callout.
+        setSelectedId(id);
+      }
     },
-    [rf, settleTween, pushHistory],
+    [rf, pushHistory, glideViewport, tourStep],
   );
-
-  /* Placement mode: capture-phase listeners own the canvas (a stray pan
-     must not fight the tap), a light rAF loop drives the ghost, the
-     pulse ring, the landing dot, and the leader — the same visual
-     language as a drag, without a card in hand yet. */
-  useEffect(() => {
-    if (!placing) return;
-    const el = wrapperRef.current;
-    if (!el) return;
-    // Aiming a ghost at the figure — a viewport re-frame mid-aim would move
-    // the target under the pointer, so the auto-re-frame stands down.
-    userAdjustedRef.current = true;
-    // Own the touch for the duration of placement: without touch-action:none
-    // on the element actually under the finger (the pane), iOS Safari can
-    // reclassify the tap as a page pan/zoom and fire pointercancel before the
-    // tap ever reaches onUp — so nothing lands. Restored on teardown.
-    const pane = el.querySelector<HTMLElement>(".react-flow__pane");
-    const prevWrapTA = el.style.touchAction;
-    const prevPaneTA = pane?.style.touchAction ?? "";
-    el.style.touchAction = "none";
-    if (pane) pane.style.touchAction = "none";
-    let pt: XYPosition | null = null;
-    let lastKey = "";
-    let seeded = false;
-    const tick = { lastTickAt: 0 };
-    indVelRef.current = { x: 0, y: 0 };
-    // Park the spotlight off-scene until the pointer speaks.
-    spotRef.current?.setAttribute("cx", "9999999");
-    const isChrome = (t: EventTarget | null) =>
-      t instanceof Element && !!t.closest("[data-ui-chrome]");
-    const onMove = (e: PointerEvent) => {
-      pt = { x: e.clientX, y: e.clientY };
-    };
-    const onDown = (e: PointerEvent) => {
-      if (isChrome(e.target)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.pointerType === "touch") setPlacingTouch(true);
-      pt = { x: e.clientX, y: e.clientY };
-    };
-    const onUp = (e: PointerEvent) => {
-      if (isChrome(e.target)) return;
-      e.stopPropagation();
-      placePart({ x: e.clientX, y: e.clientY });
-    };
-    const onCancel = () => {
-      // iOS can still cancel a touch mid-press if it decides it's a gesture.
-      // Keep placement mode alive and re-arm for a fresh contact rather than
-      // committing at a stale point or silently dropping the mode.
-      pt = null;
-      seeded = false;
-      setPlacingTouch(false);
-    };
-    const onClick = (e: MouseEvent) => {
-      if (isChrome(e.target)) return;
-      e.stopPropagation();
-      e.preventDefault();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancelPlacing();
-    };
-    el.addEventListener("pointermove", onMove, true);
-    el.addEventListener("pointerdown", onDown, true);
-    el.addEventListener("pointerup", onUp, true);
-    el.addEventListener("pointercancel", onCancel, true);
-    el.addEventListener("click", onClick, true);
-    window.addEventListener("keydown", onKey);
-    let raf = 0;
-    const loop = () => {
-      raf = requestAnimationFrame(loop);
-      const g = ghostRef.current;
-      if (!pt) {
-        // Nothing to aim from yet (touch, pre-contact): ghost hidden.
-        if (g) g.style.opacity = "0";
-        return;
-      }
-      const scale = bodyScaleRef.current;
-      const flow = rf.screenToFlowPosition(pt);
-      if (g) {
-        g.style.opacity = "1";
-        g.style.transform = `translate(${pt.x}px, ${pt.y}px)`;
-      }
-      const { near, hit } = resolveMagnet(flow, scale);
-      let target: LiftTarget;
-      let tpos: XYPosition;
-      if (hit && near) {
-        tpos = anchorToFlow(near.region, near.depth, scale);
-        target = { kind: "region", key: near.region.key, depth: near.depth };
-        const rk = `${near.region.key}:${near.depth}`;
-        if (lastKey && lastKey !== rk) magnetTick(tick, 4);
-        lastKey = rk;
-      } else {
-        target = FREE_TARGET;
-        tpos = flow;
-        lastKey = "";
-      }
-      setLiftTarget((prev) => (sameLiftTarget(prev, target) ? prev : target));
-      if (!seeded) {
-        indPosRef.current = { ...flow };
-        seeded = true;
-      }
-      // Same landing-dot spring as the drag loop.
-      const p = indPosRef.current;
-      const v = indVelRef.current;
-      v.x += (tpos.x - p.x) * 0.28;
-      v.y += (tpos.y - p.y) * 0.28;
-      v.x *= 0.68;
-      v.y *= 0.68;
-      p.x += v.x;
-      p.y += v.y;
-      if (leaderRef.current) {
-        const len = Math.hypot(p.x - flow.x, p.y - flow.y);
-        const sag = Math.min(26, len * 0.12);
-        leaderRef.current.setAttribute(
-          "d",
-          `M ${flow.x} ${flow.y} Q ${(flow.x + p.x) / 2} ${
-            (flow.y + p.y) / 2 + sag
-          } ${p.x} ${p.y}`,
-        );
-        leaderRef.current.setAttribute("opacity", "0.55");
-      }
-      if (indicatorRef.current) {
-        indicatorRef.current.style.transform = `translate(${p.x}px, ${p.y}px)`;
-      }
-      if (ringRef.current) {
-        const showRing = target.kind === "region";
-        ringRef.current.style.opacity = showRing ? "1" : "0";
-        ringRef.current.style.transform = `translate(${tpos.x}px, ${tpos.y}px)`;
-      }
-      if (spotRef.current) {
-        spotRef.current.setAttribute("cx", String(flow.x));
-        spotRef.current.setAttribute("cy", String(flow.y));
-      }
-    };
-    raf = requestAnimationFrame(loop);
-    return () => {
-      cancelAnimationFrame(raf);
-      el.removeEventListener("pointermove", onMove, true);
-      el.removeEventListener("pointerdown", onDown, true);
-      el.removeEventListener("pointerup", onUp, true);
-      el.removeEventListener("pointercancel", onCancel, true);
-      el.removeEventListener("click", onClick, true);
-      window.removeEventListener("keydown", onKey);
-      el.style.touchAction = prevWrapTA;
-      if (pane) pane.style.touchAction = prevPaneTA;
-      setLiftTarget(null);
-    };
-  }, [placing, rf, placePart, cancelPlacing]);
-
-  /* Opening the import modal is a change of intent — put the ghost away
-     (name restored) rather than leaving a mode running underneath. */
-  useEffect(() => {
-    if (importOpen) cancelPlacing();
-  }, [importOpen, cancelPlacing]);
 
   /* ——— import ——— */
 
@@ -2162,6 +2345,7 @@ function PartsMapApp() {
       pushHistory("import", `imported ${newParts.length} parts`);
       const updated = [...partsRef.current, ...newParts];
       setParts(updated);
+      setLastAddedId(newParts[newParts.length - 1].id);
       autoArmedRef.current = true;
       const n = newParts.length;
       setNotice({
@@ -2169,7 +2353,7 @@ function PartsMapApp() {
           freeCount > 0
             ? `Imported ${n} part${n === 1 ? "" : "s"} · ${freeCount} in free space`
             : `Imported ${n} part${n === 1 ? "" : "s"}`,
-        key: Date.now(),
+        key: noticeKey(),
       });
       // Whole-map context orients better than zooming one cluster — an
       // import can scatter across both figures and free space at once.
@@ -2186,6 +2370,7 @@ function PartsMapApp() {
       arrows,
       bodyScale,
       autoScale,
+      view: viewRef.current,
       viewport: rf.getViewport(),
     });
     dirtyRef.current = false;
@@ -2193,24 +2378,57 @@ function PartsMapApp() {
     // The map now lives in a file; the reload-recovery draft has done its
     // job and would otherwise resurface as a stale "restore?" next visit.
     clearDraft();
-    setNotice({ text: "Saved ✓", key: Date.now() });
+    setNotice({ text: "Saved ✓", key: noticeKey() });
   }, [parts, arrows, bodyScale, autoScale, rf]);
+
+  /** The toolbar's primary Save now exports a PNG snapshot of the map
+   *  (JSON save/load moved into the parts-list ⋯ menu). Async: only the
+   *  real download flashes the "Saved image ✓" confirmation. */
+  const onSaveImage = useCallback(async () => {
+    const ok = await downloadMapPng(parts, arrows, bodyScale, viewRef.current);
+    setNotice({
+      text: ok ? "Saved image ✓" : "Couldn't save the image.",
+      key: noticeKey(),
+    });
+  }, [parts, arrows, bodyScale]);
+
+  /** Reset — clear the whole map to a blank canvas. Undoable (Ctrl/Cmd+Z
+   *  or the notice's Undo), so it snapshots first rather than routing
+   *  through applyLoadedDoc (which wipes history). Confirmed by the caller
+   *  (the account/options popover), so this just does the clear. */
+  const resetMap = useCallback(() => {
+    if (partsRef.current.length === 0 && arrowsRef.current.length === 0) return;
+    pushHistory("reset", "cleared the map");
+    setParts([]);
+    setArrows([]);
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+    // A cleared shelf starts fresh at its top-left slot again.
+    spawnCountRef.current = 0;
+    setNotice({
+      text: "Cleared the map",
+      key: noticeKey(),
+      action: { label: "Undo", run: undo },
+    });
+  }, [pushHistory, undo]);
 
   /** The reset choreography shared by every "replace the whole map" path
    *  — file load and opening a cloud map alike. */
   const applyLoadedDoc = useCallback(
     (doc: MapDoc) => {
-      cancelPlacing();
       cancelAnimationFrame(settleRafRef.current);
       cancelAnimationFrame(scaleRafRef.current);
       cancelAnimationFrame(restoreRafRef.current);
+      cancelAnimationFrame(viewAnimRafRef.current);
       settlingRef.current = false;
       setDragOverride(null);
+      setViewAnim(null);
       setParts(doc.parts);
       setArrows(doc.arrows);
       setBodyScale(doc.bodyScale);
       manualScaleRef.current = doc.bodyScale;
       setAutoScale(doc.autoScale);
+      setView(doc.view ?? "front");
       setSelectedId(null);
       setSelectedEdgeId(null);
       // A loaded map owns its own camera (saved viewport, or wherever it
@@ -2230,7 +2448,7 @@ function PartsMapApp() {
       // A loaded map may open crowded — let the auto-grow pass judge it.
       autoArmedRef.current = true;
     },
-    [rf, cancelPlacing],
+    [rf],
   );
 
   /* ——— cloud maps (optional — signing in adds this on top of file
@@ -2252,10 +2470,11 @@ function PartsMapApp() {
       arrows,
       bodyScale,
       autoScale,
+      view: viewRef.current,
       viewport: rf.getViewport(),
     };
     setSaveStatus("saving");
-    setNotice({ text: "Saving to your maps…", key: Date.now() });
+    setNotice({ text: "Saving to your maps…", key: noticeKey() });
     try {
       if (cloudDocRef.current) {
         try {
@@ -2268,7 +2487,12 @@ function PartsMapApp() {
         }
       }
       if (!cloudDocRef.current) {
-        const title = `Parts Map – ${new Date().toISOString().slice(0, 10)}`;
+        // A name given via the top-bar rename survives the first cloud
+        // save; only the "Untitled map" placeholder gets the dated one.
+        const title =
+          mapTitle.trim() && mapTitle !== "Untitled map"
+            ? mapTitle
+            : `Parts Map – ${new Date().toISOString().slice(0, 10)}`;
         const created = await createMap(title, doc);
         cloudDocRef.current = { id: created.id, title: created.title };
         setMapTitle(created.title);
@@ -2276,24 +2500,24 @@ function PartsMapApp() {
       dirtyRef.current = false;
       setSaveStatus("saved");
       clearDraft();
-      setNotice({ text: "Saved to your maps ✓", key: Date.now() });
+      setNotice({ text: "Saved to your maps ✓", key: noticeKey() });
     } catch (e) {
       // Still unsaved — let the indicator and next debounce reflect that.
       setSaveStatus("dirty");
       setNotice({
         text: e instanceof CloudError ? e.message : "Couldn't save to your maps.",
-        key: Date.now(),
+        key: noticeKey(),
       });
     } finally {
       cloudSavingRef.current = false;
     }
-  }, [parts, arrows, bodyScale, autoScale, rf]);
+  }, [parts, arrows, bodyScale, autoScale, rf, mapTitle]);
   const onOpenCloudMap = useCallback(
     (id: string, title: string, doc: MapDoc) => {
       applyLoadedDoc(doc);
       cloudDocRef.current = { id, title };
       setMapTitle(title);
-      setNotice({ text: `Opened “${title}”`, key: Date.now() });
+      setNotice({ text: `Opened “${title}”`, key: noticeKey() });
     },
     [applyLoadedDoc],
   );
@@ -2316,7 +2540,7 @@ function PartsMapApp() {
           text: readFailure
             ? "Couldn't read that file — try picking it again."
             : "Couldn't read that file — it doesn't look like a Parts Map JSON.",
-          key: Date.now(),
+          key: noticeKey(),
         });
       }
     },
@@ -2333,12 +2557,36 @@ function PartsMapApp() {
   /** Open one phone sheet, closing the list and any card selection first
    *  (one sheet at a time). */
   const openPhoneSheet = useCallback(
-    (which: "create" | "share" | "more") => {
+    (which: "create" | "share" | "more" | "rename") => {
       setSelectedId(null);
       setListOpen(false);
       setPhoneSheet(which);
     },
     [],
+  );
+
+  /** Rename the open map from the top-bar title. Cloud maps rename in
+   *  place (same seam as My Maps); otherwise the title is display-only
+   *  state — it isn't part of MapDoc, so this never marks the map dirty. */
+  const commitMapRename = useCallback(
+    async (raw: string) => {
+      const title = raw.trim();
+      if (!title || title === mapTitle) return;
+      setMapTitle(title);
+      if (!cloudDocRef.current) return;
+      const id = cloudDocRef.current.id;
+      try {
+        await updateMap(id, { title });
+        cloudDocRef.current = { id, title };
+      } catch (e) {
+        setNotice({
+          text:
+            e instanceof CloudError ? e.message : "Couldn't rename the map.",
+          key: noticeKey(),
+        });
+      }
+    },
+    [mapTitle],
   );
 
   const onBodyScaleManual = useCallback((v: number) => {
@@ -2362,6 +2610,7 @@ function PartsMapApp() {
       arrows: arrowsRef.current,
       bodyScale: bodyScaleRef.current,
       autoScale: autoScaleRef.current,
+      view: viewRef.current,
       viewport: rf.getViewport(),
     }),
     [rf],
@@ -2383,7 +2632,7 @@ function PartsMapApp() {
         text: on
           ? "Keeping a private draft on this device."
           : "Local draft off — cleared from this device.",
-        key: Date.now(),
+        key: noticeKey(),
       });
     },
     [currentDoc],
@@ -2426,7 +2675,7 @@ function PartsMapApp() {
     if (doc.parts.length === 0) return;
     setNotice({
       text: "Restore your last map?",
-      key: Date.now(),
+      key: noticeKey(),
       ttlMs: 15000,
       action: {
         label: "Restore",
@@ -2461,29 +2710,40 @@ function PartsMapApp() {
           t.isContentEditable);
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      // The locked tour swallows hardware undo/redo — a Ctrl+Z would
+      // silently unwind the very placement the step just taught. Escape
+      // stays live below: its consequences (sheet close, deselect) are
+      // absorbed by the tour's regress / auto-reselect rules by design.
+      if (tourLockedRef.current && mod && (key === "z" || key === "y")) {
+        e.preventDefault();
+        return;
+      }
       // Redo: Ctrl/Cmd+Shift+Z or Ctrl+Y. Checked first so Shift+Z doesn't
       // fall through to undo.
       if (mod && ((e.shiftKey && key === "z") || key === "y")) {
-        if (typing || liftInfoRef.current || placingRef.current) return;
+        if (typing || liftInfoRef.current) return;
         e.preventDefault();
         redo();
         return;
       }
       if (mod && !e.shiftKey && key === "z") {
-        // Fields keep their own text undo; mid-drag / mid-placement the
-        // map is in the hand, not on the table.
-        if (typing || liftInfoRef.current || placingRef.current) return;
+        // Fields keep their own text undo; mid-drag the map is in the hand,
+        // not on the table.
+        if (typing || liftInfoRef.current) return;
         e.preventDefault();
         undo();
         return;
       }
-      if (typing || placingRef.current) return;
+      if (typing) return;
       if (e.key === "Escape") {
-        // Whichever modal is on top closes first — MyMaps and Welcome used
-        // to have no Escape path at all (only Import did).
+        // Whichever overlay is on top closes first — modals, then phone
+        // sheets (create/share/more, then the list), then selection. The
+        // desktop docked list stays: it's persistent chrome, not an overlay.
         if (importOpen) setImportOpen(false);
         else if (myMapsOpen) setMyMapsOpen(false);
         else if (welcomeOpen) setWelcomeOpen(false);
+        else if (phoneSheet) setPhoneSheet(null);
+        else if (listOpen && isPhoneRef.current) setListOpen(false);
         else {
           setSelectedEdgeId(null);
           setSelectedId(null);
@@ -2504,7 +2764,7 @@ function PartsMapApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, selectedId]);
+  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId]);
 
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
@@ -2520,18 +2780,28 @@ function PartsMapApp() {
     // unmeasured nodes still covers the brief pre-measure window.
     if (!autoScale || !autoArmedRef.current) return;
     if (lift || dragOverride || settlingRef.current) return;
+    // The locked phone tour owns the stage: a mid-tour rescale would slide
+    // the spotlighted card out from under its ring, and the pill's Undo is
+    // tappable through the lock. Skip (armed state survives) — the pass
+    // resumes on the first mutation after the tour.
+    if (tourLockedRef.current) return;
     const timer = setTimeout(() => {
       if (
         !autoArmedRef.current ||
         liftInfoRef.current ||
-        settlingRef.current
+        settlingRef.current ||
+        tourLockedRef.current
       ) {
         return;
       }
       autoArmedRef.current = false;
       const onBody = partsRef.current.filter((p) => {
         const r = REGION_BY_KEY[p.location];
-        return !p.offBody && r && !r.offBody;
+        // Only the shown surface's cards are on the body; parked ones (in
+        // the side lanes) don't count toward crowding.
+        return (
+          !p.offBody && r && !r.offBody && partSurface(p) === viewRef.current
+        );
       });
       const cur = bodyScaleRef.current;
       const floor = Math.max(MIN_SCALE, manualScaleRef.current);
@@ -2542,14 +2812,14 @@ function PartsMapApp() {
           animateBodyScale(floor);
           setNotice({
             text: `Auto-space: eased back (${Math.round((floor / cur - 1) * 100)}%)`,
-            key: Date.now(),
+            key: noticeKey(),
             action: { label: "Undo", run: () => animateBodyScale(cur) },
             ttlMs: 8000,
           });
         }
         return;
       }
-      const posMap = derivePositions(partsRef.current, cur);
+      const posMap = derivePositions(partsRef.current, cur, viewRef.current);
       const PAD = 14;
       // For each pair, the scale factor at which it is exactly
       // comfortable (anchors spread linearly with scale; card sizes
@@ -2606,7 +2876,7 @@ function PartsMapApp() {
               pct > 0
                 ? `Auto-space: made room (+${pct}%)`
                 : `Auto-space: eased back (${pct}%)`,
-            key: Date.now(),
+            key: noticeKey(),
             action: { label: "Undo", run: () => animateBodyScale(cur) },
             ttlMs: 8000,
           });
@@ -2641,14 +2911,26 @@ function PartsMapApp() {
 
   /* ——— derived views: one parts array → nodes + list ——— */
   const nodes: Node[] = useMemo(() => {
-    const posMap = derivePositions(parts, bodyScale);
+    const posMap = derivePositions(parts, bodyScale, view);
     return parts.map((p) => {
       const md = measuredDims.get(p.id);
+      // On-body but on the hidden surface → resting in a side lane.
+      const parked = !p.offBody && partSurface(p) !== view;
       return {
         id: p.id,
         type: "part" as const,
+        // A drag override wins; else the flip animation's transient position;
+        // else the derived (view-aware) position.
         position:
-          dragOverride?.id === p.id ? dragOverride.pos : posMap.get(p.id)!,
+          dragOverride?.id === p.id
+            ? dragOverride.pos
+            : viewAnim?.get(p.id) ?? posMap.get(p.id)!,
+        // Locked cards can't be dragged or key-deleted (they stay selectable
+        // so the lock can be toggled off; the toolbar's explicit confirm-
+        // delete calls api.deletePart directly and still works). Parked
+        // cards don't drag either — flip to their side to move them.
+        draggable: !p.locked && !parked,
+        deletable: !p.locked,
         width: p.w,
         height: p.h,
         // Echo RF's own measurement back so adoptUserNodes doesn't wipe it
@@ -2664,12 +2946,15 @@ function PartsMapApp() {
           lifted: lift?.id === p.id,
           popKey: dropPop?.id === p.id ? dropPop.key : 0,
           revealKey: reveal?.id === p.id ? reveal.key : 0,
+          parked,
         },
       };
     });
   }, [
     parts,
     bodyScale,
+    view,
+    viewAnim,
     dragOverride,
     selectedId,
     lift,
@@ -2686,11 +2971,14 @@ function PartsMapApp() {
         source: a.sourceId,
         target: a.targetId,
         selected: a.id === selectedEdgeId,
-        data: { color: a.color, label: a.label, sourceHandle: a.sourceHandle },
-        style: { stroke: a.color, strokeWidth: 2 },
+        // Arrows are black-only now (the per-arrow color picker was
+        // removed); a.color is kept in the model for save-file round-trip
+        // but no longer drives the render.
+        data: { label: a.label, sourceHandle: a.sourceHandle },
+        style: { stroke: ARROW_INK, strokeWidth: 2 },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: a.color,
+          color: ARROW_INK,
           width: 16,
           height: 16,
         },
@@ -2698,13 +2986,42 @@ function PartsMapApp() {
     [arrows, selectedEdgeId],
   );
 
+  /** True while any phone overlay owns the stage — the floating notice
+   *  pill holds back so text never covers a sheet. Notice state + TTL keep
+   *  running, so a notice that outlives the sheet still appears once the
+   *  sheet closes (natural deferral, no queue). Mirrors the sheets' own
+   *  open conditions. */
+  const phoneOverlayUp =
+    isPhone &&
+    (phoneSheet !== null ||
+      listOpen ||
+      importOpen ||
+      myMapsOpen ||
+      (!lift && (selectedId !== null || selectedEdgeId !== null)));
+
   return (
     <AppApiContext.Provider value={api}>
      <PartsListContext.Provider value={parts}>
+     <ArrowsListContext.Provider value={arrows}>
       <div
         ref={wrapperRef}
-        className="relative h-dvh w-full"
-        style={{ background: "var(--canvas)" }}
+        // overflow-hidden + clip: the parked bottom sheets (translateY
+        // just below the stage) otherwise hand the DOCUMENT scroll range,
+        // and any focus/scrollIntoView can wedge the whole app mid-scroll.
+        // `clip` (where supported) also makes the wrapper itself
+        // un-scrollable programmatically; `hidden` is the fallback.
+        className="relative h-dvh w-full overflow-hidden"
+        style={{ background: "var(--canvas)", overflow: "clip" }}
+        // Android long-press pops the OS context menu mid-card-grab.
+        // Suppress it on the canvas and its cards/edges only — text
+        // fields (sheets, popovers) keep their paste menus.
+        onContextMenu={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest("input,textarea,select,[contenteditable='true']"))
+            return;
+          if (t.closest(".react-flow__pane, .react-flow__node, .react-flow__edge"))
+            e.preventDefault();
+        }}
       >
         <ReactFlow
           nodes={nodes}
@@ -2718,13 +3035,15 @@ function PartsMapApp() {
           onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
           onMoveStart={onMoveStart}
-          onMove={onMove}
           onPaneClick={() => {
             setSelectedId(null);
             setSelectedEdgeId(null);
-            // On phone the list is a sheet over the canvas — a tap on the
+            // On phone every sheet sits over the canvas — a tap on the
             // map means "let me see it."
-            if (isPhoneRef.current) setListOpen(false);
+            if (isPhoneRef.current) {
+              setListOpen(false);
+              setPhoneSheet(null);
+            }
           }}
           nodeOrigin={[0.5, 0.5]}
           connectionMode={ConnectionMode.Loose}
@@ -2744,7 +3063,14 @@ function PartsMapApp() {
           paneClickDistance={8}
           multiSelectionKeyCode={null}
           selectionOnDrag={false}
-          deleteKeyCode={["Backspace", "Delete"]}
+          // The locked tour's guard gates pointers; these two close the
+          // hardware side: Delete could strand the link step below two
+          // parts (the delete BUTTON is denied, the key wasn't), and a
+          // scroll wheel would zoom the stage out from under a spotlight.
+          deleteKeyCode={tourLocked ? null : ["Backspace", "Delete"]}
+          zoomOnScroll={!tourLocked}
+          // The floating frame-map button owns the bottom-right corner.
+          attributionPosition="bottom-left"
           // Off-screen cards/arrows skip rendering entirely — relevant once
           // a map gets crowded (30-60+ parts) or the camera is zoomed into
           // one figure. The actively dragged/lifted node is always under
@@ -2760,11 +3086,12 @@ function PartsMapApp() {
                 pointerEvents: "none",
               }}
             >
-              <BodyOutline bodyScale={bodyScale} />
+              <BodyOutline bodyScale={bodyScale} view={view} />
               <AnchorConstellation
                 bodyScale={bodyScale}
-                visible={!!lift || !!placing}
-                boost={!!placing}
+                view={view}
+                visible={!!lift}
+                boost={false}
                 spotRef={spotRef}
               />
             </div>
@@ -2783,7 +3110,7 @@ function PartsMapApp() {
             )}
             <LiftOverlay
               target={liftTarget}
-              touch={lift?.isTouch ?? placingTouch}
+              touch={lift?.isTouch ?? false}
               leaderRef={leaderRef}
               indicatorRef={indicatorRef}
               ringRef={ringRef}
@@ -2791,33 +3118,40 @@ function PartsMapApp() {
           </ViewportPortal>
         </ReactFlow>
 
-        {/* Phone-only Front/Back jump: glides the camera between the two
-            figures (framing is per-figure on narrow screens). Sits just
-            below the top bar so the two don't share a row. */}
+        {/* Front/Back toggle: flips which surface the single body shows —
+            the hidden surface's cards glide out to the side lanes. Both
+            layouts; sits below the top bar / toolbar. */}
         <div
           data-ui-chrome
-          className="absolute left-1/2 top-[calc(4rem+env(safe-area-inset-top))] z-20 flex -translate-x-1/2 gap-0.5 rounded-full p-1 sm:hidden"
+          className="absolute left-1/2 top-[calc(4rem+env(safe-area-inset-top))] z-20 flex -translate-x-1/2 gap-0.5 rounded-full p-1"
           style={{ ...panelStyle, touchAction: "manipulation" }}
         >
           {(["front", "back"] as const).map((d) => (
             <button
               key={d}
-              aria-label={`Show ${d} figure`}
-              aria-pressed={viewSide === d}
-              className="rounded-full px-3.5 py-1 text-[11px] uppercase tracking-[0.12em] transition-colors"
+              aria-label={`Show the ${d} of the body`}
+              aria-pressed={view === d}
+              className="rounded-full px-3.5 py-1 text-[11px] uppercase tracking-[0.12em] transition-colors active:bg-black/10 pointer-coarse:min-h-11"
               style={
-                viewSide === d
+                view === d
                   ? { background: "var(--accent)", color: "#fff" }
                   : { color: "var(--ink-soft)" }
               }
-              onClick={() => jumpToFigure(d)}
+              onClick={() => {
+                // The flip moves every card; give it the same buzz a drop
+                // gets. Only on a real change — and only here, not inside
+                // flipView, whose system-initiated calls (reveal) stay
+                // silent.
+                if (view !== d) haptic(6);
+                flipView(d);
+              }}
             >
               {d}
             </button>
           ))}
         </div>
         <Toolbar
-          onAdd={beginPlacing}
+          onAdd={spawnPart}
           nameValue={draft}
           onNameChange={setDraft}
           onImportOpen={() => setImportOpen(true)}
@@ -2828,16 +3162,13 @@ function PartsMapApp() {
             setAutoScale(v);
             markDirty();
           }}
-          onSave={onSave}
-          onLoad={onLoad}
+          onSaveImage={onSaveImage}
+          onClearMap={resetMap}
           listOpen={listOpen}
           onToggleList={() => setListOpen((v) => !v)}
-          soundOn={soundOn}
-          onToggleSound={() => setSoundOn((v) => !v)}
           onShowWelcome={reopenWelcome}
           onOpenMyMaps={() => setMyMapsOpen(true)}
           onSaveToCloud={saveToCloud}
-          saveStatus={saveStatus}
           draftEnabled={draftEnabled}
           onToggleDraft={toggleDraft}
           canUndo={canUndo}
@@ -2853,7 +3184,7 @@ function PartsMapApp() {
         <PhoneTopBar
           mapTitle={mapTitle}
           onHome={goHome}
-          onTitle={goHome}
+          onTitle={() => openPhoneSheet("rename")}
           onSearch={() => {
             setSelectedId(null);
             setPhoneSheet(null);
@@ -2885,13 +3216,14 @@ function PartsMapApp() {
           }}
         />
         {/* Parts list — a docked side panel on desktop, a bottom sheet on
-            phones (hidden while dragging/placing, like the edit sheet). */}
+            phones (hidden while dragging, like the edit sheet). */}
         {isPhone ? (
           <PhonePartsSheet
             parts={parts}
             arrows={arrows}
             bodyScale={bodyScale}
-            open={listOpen && !lift && !placing}
+            view={view}
+            open={listOpen && !lift}
             autoFocusSearch={listSearchFocus}
             onReveal={revealPart}
             onClose={() => {
@@ -2899,45 +3231,54 @@ function PartsMapApp() {
               setListSearchFocus(false);
             }}
             onExportMenuOpenChange={setExportMenuOpen}
-            onNotice={(text) => setNotice({ text, key: Date.now() })}
           />
         ) : (
           <PartsListPanel
             parts={parts}
             arrows={arrows}
             bodyScale={bodyScale}
+            view={view}
             open={listOpen}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onReveal={revealPart}
             onClose={() => setListOpen(false)}
             onExportMenuOpenChange={setExportMenuOpen}
-            onNotice={(text) => setNotice({ text, key: Date.now() })}
+            onNotice={(text) => setNotice({ text, key: noticeKey() })}
+            onSaveJson={onSave}
+            onLoadJson={onLoad}
+            dirty={saveStatus === "dirty"}
           />
         )}
-        {/* Phone card editor — bottom sheet; hides while dragging/placing
-            so it never covers a landing. */}
+        {/* Phone card editor — bottom sheet; hides while dragging so it
+            never covers a landing. */}
         <MobileEditSheet
           part={parts.find((p) => p.id === selectedId) ?? null}
           open={
             isPhone &&
             !!selectedId &&
             parts.some((p) => p.id === selectedId) &&
-            !lift &&
-            !placing
+            !lift
           }
           onClose={() => setSelectedId(null)}
         />
+        {/* Phone arrow editor — bottom sheet; the floating popover stays a
+            desktop affordance. Hidden while dragging, like the others. */}
+        <ArrowEditSheet
+          arrow={arrows.find((a) => a.id === selectedEdgeId) ?? null}
+          open={isPhone && !!selectedEdgeId && !lift}
+          onClose={() => setSelectedEdgeId(null)}
+        />
         {/* Phone create / share / more sheets (Miro-style). Gated off during
-            a drag/placement so they never cover a landing. */}
+            a drag so they never cover a landing. */}
         <CreateSheet
-          open={phoneSheet === "create" && !lift && !placing}
+          open={phoneSheet === "create" && !lift}
           onClose={() => setPhoneSheet(null)}
           nameValue={draft}
           onNameChange={setDraft}
           onAdd={(name) => {
             setPhoneSheet(null);
-            beginPlacing(name);
+            spawnPart(name);
             setDraft("");
           }}
           onImport={() => {
@@ -2951,19 +3292,19 @@ function PartsMapApp() {
           }}
         />
         <ShareSheet
-          open={phoneSheet === "share" && !lift && !placing}
+          open={phoneSheet === "share" && !lift}
           onClose={() => setPhoneSheet(null)}
           parts={parts}
           arrows={arrows}
           bodyScale={bodyScale}
+          view={view}
           onSaveToCloud={saveToCloud}
           onSaveFile={onSave}
           onLoadFile={onLoad}
           onOpenMyMaps={() => setMyMapsOpen(true)}
-          onNotice={(text) => setNotice({ text, key: Date.now() })}
         />
         <MoreSheet
-          open={phoneSheet === "more" && !lift && !placing}
+          open={phoneSheet === "more" && !lift}
           onClose={() => setPhoneSheet(null)}
           bodyScale={bodyScale}
           onBodyScale={onBodyScaleManual}
@@ -2972,30 +3313,42 @@ function PartsMapApp() {
             setAutoScale(v);
             markDirty();
           }}
-          soundOn={soundOn}
-          onToggleSound={() => setSoundOn((v) => !v)}
           draftEnabled={draftEnabled}
           onToggleDraft={toggleDraft}
           onShowWelcome={reopenWelcome}
+          onClearMap={resetMap}
         />
-        {/* Quiet notice pill: what just happened, sometimes one action. */}
-        {notice && (
+        <RenameSheet
+          open={phoneSheet === "rename" && !lift}
+          onClose={() => setPhoneSheet(null)}
+          title={mapTitle}
+          onCommit={commitMapRename}
+        />
+        {/* Quiet notice pill: what just happened, sometimes one action.
+            Never shown while a phone sheet/page is up (text must not cover
+            UI — in-sheet outcomes speak inline on their rows instead); the
+            state keeps ticking so it can still appear after the sheet
+            closes. Renders after the sheets so it paints above them when
+            it does show. */}
+        {notice && !phoneOverlayUp && (
           <div
             key={notice.key}
             data-ui-chrome
+            data-tour-allow
             role="status"
-            className="fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full py-1.5 pl-4 pr-1.5 sm:bottom-auto sm:top-16"
+            className={`fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] left-1/2 z-30 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-2xl py-1.5 pl-4 pr-1.5 ${isPhone ? "" : "sm:bottom-6"}`}
             style={{ ...panelStyle, touchAction: "manipulation" }}
+            onClick={() => setNotice(null)}
           >
             <span
-              className="whitespace-nowrap text-[11px]"
+              className="max-w-[min(78vw,26rem)] text-[11px]"
               style={{ color: "var(--ink-soft)" }}
             >
               {notice.text}
             </span>
             {notice.action ? (
               <button
-                className="rounded-full px-2.5 py-1 text-[11px]"
+                className="rounded-full px-2.5 py-1 text-[11px] pointer-coarse:min-h-9"
                 style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink)" }}
                 onClick={() => {
                   notice.action!.run();
@@ -3023,68 +3376,24 @@ function PartsMapApp() {
             arrows,
             bodyScale,
             autoScale,
+            view: viewRef.current,
             viewport: rf.getViewport(),
           })}
           isDirty={() => dirtyRef.current}
           onOpenMap={onOpenCloudMap}
         />
-        {parts.length === 0 && !placing && (
-          <div className="fade-in pointer-events-none absolute inset-x-0 top-28 z-10 flex justify-center px-6 text-center sm:top-20">
+        {/* Sits below the Front/Back toggle band (which ends ~108px+inset
+            on coarse, ~99px on desktop) — text must never touch chrome. */}
+        {parts.length === 0 && (
+          <div
+            className={`fade-in pointer-events-none absolute inset-x-0 top-[calc(8rem+env(safe-area-inset-top))] z-10 flex justify-center px-6 text-center ${isPhone ? "" : "sm:top-28"}`}
+          >
             <p className="text-xs" style={{ color: "var(--ink-faint)" }}>
               {isPhone
-                ? "Tap + to add your first part — then tap where it lives."
-                : "Name a part to begin — then tap where it lives."}
+                ? "Tap + to add a part, then drag it onto the body."
+                : "Add a part, then drag it onto the body."}
             </p>
           </div>
-        )}
-        {placing && (
-          <>
-            {/* Ghost card: the part-to-be, held by the hand. Screen-space,
-                transform written by the placement loop. */}
-            <div
-              ref={ghostRef}
-              className="pointer-events-none absolute left-0 top-0 z-30"
-              style={{ opacity: 0, willChange: "transform" }}
-            >
-              <div
-                className="part-inner lifted px-4 py-3 text-center leading-snug"
-                style={{
-                  background: placing.color,
-                  color: "var(--ink)",
-                  borderRadius: 14,
-                  fontSize: 14,
-                  maxWidth: 180,
-                  border: "1px solid rgba(58,55,51,0.08)",
-                  transform:
-                    "translate(-50%, -60%) scale(1.03) rotate(-1.5deg)",
-                }}
-              >
-                {placing.name}
-              </div>
-            </div>
-            {/* Hint pill — the mode's only chrome. Sits above the thumb
-                bar on phones, under the top bar on desktop. */}
-            <div
-              data-ui-chrome
-              className="fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-full py-1.5 pl-4 pr-1.5 sm:bottom-auto sm:top-16"
-              style={{ ...panelStyle, touchAction: "manipulation" }}
-            >
-              <span
-                className="max-w-[60vw] truncate text-xs"
-                style={{ color: "var(--ink-soft)" }}
-              >
-                Tap where “{placing.name}” lives
-              </span>
-              <button
-                aria-label="Cancel placing"
-                className="rounded-full px-2 py-1 text-xs hover:bg-black/5 pointer-coarse:min-h-8 pointer-coarse:min-w-8"
-                style={{ color: "var(--ink-faint)" }}
-                onClick={cancelPlacing}
-              >
-                ✕
-              </button>
-            </div>
-          </>
         )}
         <datalist id="region-labels">
           {REGIONS.map((r) => (
@@ -3094,20 +3403,49 @@ function PartsMapApp() {
         <WelcomeModal
           open={welcomeOpen}
           onClose={closeWelcome}
-          onStartTour={startTour}
+          onStartTour={() => startTour()}
           onExplore={() => {
-            applyLoadedDoc(sampleMap());
+            // Load the example AND guide through it — the tour's steps
+            // measure changes against a baseline, so it works the same on
+            // a populated map. The baseline must come from the doc itself:
+            // the refs startTour reads still hold the pre-load map in this
+            // tick.
+            const doc = sampleMap();
+            applyLoadedDoc(doc);
             setMapTitle("Sample map");
-            closeWelcome();
+            startTour({
+              parts: doc.parts.length,
+              arrows: doc.arrows.length,
+              onBody: doc.parts.filter((p) => !p.offBody).length,
+            });
           }}
         />
-        {/* Hidden during tap-to-place (its own hint pill already carries
-            the guidance) and hidden behind an open phone list sheet
-            until the list itself closes — see tourVisible above. */}
+        {/* Hidden while the wrong surface covers its anchor — see
+            tourVisible above. */}
         {tourVisible && (
-          <CoachMarks step={tourStep!} snapshot={tourSnapshot} onSkip={skipTour} />
+          <CoachMarks
+            steps={tourSteps}
+            step={tourStep!}
+            snapshot={tourSnapshot}
+            onSkip={skipTour}
+            nudgeKey={tourNudge}
+          />
+        )}
+        {/* One-shot soft accent wash as the tour completes — a calm
+            celebration, not confetti. Skipped under reduced motion. */}
+        {tourDoneKey !== null && !reducedMotion && (
+          <div
+            // String-namespaced: this and the notice pill are keyed
+            // siblings — bare numbers from different sources must never
+            // be able to collide here again.
+            key={`wash-${tourDoneKey}`}
+            aria-hidden
+            className="tour-done pointer-events-none absolute inset-0 z-30"
+            onAnimationEnd={() => setTourDoneKey(null)}
+          />
         )}
       </div>
+     </ArrowsListContext.Provider>
      </PartsListContext.Provider>
     </AppApiContext.Provider>
   );

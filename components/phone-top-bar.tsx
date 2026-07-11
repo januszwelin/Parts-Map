@@ -1,13 +1,14 @@
 "use client";
 
 /* ════════════════════════════════════════════════════════════════════
-   PHONE TOP BAR — the Miro-style identity/nav strip: a home button, the
-   current map's name (tap → My Maps), and search / share / more actions
-   that open the phone sheets. Phone layout only (`sm:hidden`); desktop
-   keeps the classic top Toolbar.
+   PHONE TOP BAR — the Miro-style identity/nav strip: a home button
+   (→ My Maps), the current map's name (tap → rename), and search /
+   share / more actions that open the phone sheets. Phone layout only
+   (`sm:hidden`); desktop keeps the classic top Toolbar.
    ════════════════════════════════════════════════════════════════════ */
 
 import { panelStyle } from "@/lib/ui";
+import { useIsPhone } from "@/hooks/use-media";
 
 const stroke = {
   fill: "none",
@@ -73,14 +74,19 @@ export function PhoneTopBar({
   onMore: () => void;
 }) {
   const iconBtn =
-    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-black/5 pointer-coarse:min-h-10 pointer-coarse:min-w-10";
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10";
+  // Landscape phones are ≥640px wide — the `sm:hidden` CSS gate alone
+  // would swap this bar for the desktop toolbar there, while the sheets
+  // (JS-gated on useIsPhone) stay phone-flavored. Keep the CSS default
+  // for a hydration-safe first paint, drop it once isPhone is known.
+  const isPhone = useIsPhone();
   return (
     <div
       data-ui-chrome
-      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center px-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:hidden"
+      className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))] ${isPhone ? "" : "sm:hidden"}`}
     >
       <div
-        className="pointer-events-auto flex w-full select-none items-center gap-0.5 rounded-2xl px-1.5 py-1.5"
+        className="pointer-events-auto flex w-full select-none items-center gap-1 rounded-2xl px-1.5 py-1.5"
         style={{ ...panelStyle, touchAction: "manipulation" }}
       >
         <button
@@ -92,9 +98,9 @@ export function PhoneTopBar({
           <HomeIcon />
         </button>
         <button
-          aria-label={`Map: ${mapTitle} — open my maps`}
+          aria-label={`Map: ${mapTitle} — rename`}
           title={mapTitle}
-          className="min-w-0 flex-1 truncate rounded-xl px-2 py-1.5 text-left text-sm transition-colors hover:bg-black/5"
+          className="min-w-0 flex-1 truncate rounded-xl px-2 py-1.5 text-left text-sm transition-colors hover:bg-black/5 active:bg-black/10"
           style={{ color: "var(--ink)" }}
           onClick={onTitle}
         >

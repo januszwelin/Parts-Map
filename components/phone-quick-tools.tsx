@@ -3,10 +3,12 @@
 /* ════════════════════════════════════════════════════════════════════
    PHONE QUICK-TOOLS — the sparse bottom pill: undo · redo │ list · +.
    The everyday touch actions kept one tap away; everything else lives in
-   the sheets reached from the top bar. Phone only (`sm:hidden`).
+   the sheets reached from the top bar. Phone only (`sm:hidden` +
+   useIsPhone override for ≥640px landscape phones).
    ════════════════════════════════════════════════════════════════════ */
 
 import { panelStyle } from "@/lib/ui";
+import { useIsPhone } from "@/hooks/use-media";
 
 const stroke = {
   fill: "none",
@@ -71,11 +73,14 @@ export function PhoneQuickTools({
   onAdd: () => void;
 }) {
   const iconBtn =
-    "flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-black/5 disabled:opacity-30";
+    "flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-black/5 active:bg-black/10 disabled:opacity-30";
+  // Same landscape-phone JS override as the top bar — `sm:hidden` alone
+  // would hand ≥640px landscape phones the desktop toolbar.
+  const isPhone = useIsPhone();
   return (
     <div
       data-ui-chrome
-      className="absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 select-none items-center gap-0.5 rounded-full p-1.5 sm:hidden"
+      className={`absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 select-none items-center gap-1 rounded-full p-1.5 ${isPhone ? "" : "sm:hidden"}`}
       style={{ ...panelStyle, touchAction: "manipulation" }}
     >
       <button
@@ -116,7 +121,7 @@ export function PhoneQuickTools({
       <button
         data-tour="add"
         aria-label="Add a part"
-        className="ml-0.5 flex h-11 w-11 items-center justify-center rounded-full text-white transition-opacity hover:opacity-90"
+        className="ml-0.5 flex h-11 w-11 items-center justify-center rounded-full text-white transition-opacity hover:opacity-90 active:opacity-75"
         style={{ background: "var(--accent)" }}
         onClick={onAdd}
       >

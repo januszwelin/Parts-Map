@@ -4,7 +4,7 @@
    PART NODE — the card on the canvas
    ════════════════════════════════════════════════════════════════════ */
 
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 import {
   NodeToolbar,
   NodeResizer,
@@ -21,7 +21,14 @@ import { useIsPhone } from "@/hooks/use-media";
 import { EditPopover } from "@/components/part-editor";
 
 export type PartNodeType = Node<
-  { part: Part; lifted: boolean; popKey: number; revealKey: number },
+  {
+    part: Part;
+    lifted: boolean;
+    popKey: number;
+    revealKey: number;
+    /** On-body but on the hidden surface — resting in a side lane. */
+    parked: boolean;
+  },
   "part"
 >;
 
@@ -40,7 +47,7 @@ export const PartNode = memo(function PartNode({
   selected,
   dragging,
 }: NodeProps<PartNodeType>) {
-  const { part, lifted, popKey, revealKey } = data;
+  const { part, lifted, popKey, revealKey, parked } = data;
   const api = useAppApi();
   const onBackSurface = !part.offBody && partSurface(part) === "back";
   const connectionInProgress = useConnection((c) => c.inProgress);
@@ -55,6 +62,34 @@ export const PartNode = memo(function PartNode({
   // One-shot reveal halo (the list's "where is it?"), same retirement.
   const [revealPlayed, setRevealPlayed] = useState(0);
   const revealing = revealKey !== 0 && revealKey !== revealPlayed;
+  // Locked/parked cards aren't draggable, and React Flow emits nothing
+  // for a drag attempt on a non-draggable node — a silent dead gesture.
+  // A tiny pointer probe answers the tug (once per gesture) with a
+  // refusal tick + a one-line why via api.noticeBlockedDrag. Tap-select
+  // still works: nothing here stops propagation.
+  const refuse = parked || !!part.locked;
+  const tugRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  const refuseProbe = refuse
+    ? {
+        onPointerDown: (e: React.PointerEvent) => {
+          tugRef.current = { x: e.clientX, y: e.clientY, fired: false };
+        },
+        onPointerMove: (e: React.PointerEvent) => {
+          const t = tugRef.current;
+          if (!t || t.fired) return;
+          if (Math.hypot(e.clientX - t.x, e.clientY - t.y) > 10) {
+            t.fired = true;
+            api.noticeBlockedDrag(part.id);
+          }
+        },
+        onPointerUp: () => {
+          tugRef.current = null;
+        },
+        onPointerCancel: () => {
+          tugRef.current = null;
+        },
+      }
+    : {};
 
   return (
     <div
@@ -65,7 +100,7 @@ export const PartNode = memo(function PartNode({
       }}
     >
       <NodeResizer
-        isVisible={!!selected && !dragging}
+        isVisible={!!selected && !dragging && !part.locked}
         minWidth={90}
         minHeight={44}
         keepAspectRatio={part.shape === "ellipse"}
@@ -76,9 +111,12 @@ export const PartNode = memo(function PartNode({
         ref={(el) => {
           api.registerPartInner(part.id, el);
         }}
+        {...refuseProbe}
         className={`part-inner flex h-full w-full items-center justify-center px-4 py-3 text-center leading-snug ${
           lifted ? "lifted" : ""
-        } ${popping ? "drop-pop" : ""} ${revealing ? "reveal-glow" : ""}`}
+        } ${popping ? "drop-pop" : ""} ${revealing ? "reveal-glow" : ""} ${
+          parked ? "parked" : ""
+        }`}
         onAnimationEnd={(e) => {
           if (e.animationName === "drop-pop") setPopPlayed(popKey);
           if (e.animationName === "reveal-glow") setRevealPlayed(revealKey);
@@ -89,6 +127,7 @@ export const PartNode = memo(function PartNode({
           borderRadius: SHAPE_RADIUS[part.shape],
           fontSize: FONT_PX[part.fontSize],
           fontWeight: part.bold ? 600 : 400,
+          textDecoration: part.underline ? "underline" : undefined,
           border: "1px solid rgba(58,55,51,0.08)",
         }}
       >
@@ -112,10 +151,31 @@ export const PartNode = memo(function PartNode({
             {partSurface(part)}
           </span>
         )}
+        {part.locked && (
+          <span
+            className="pointer-events-none absolute -top-2 left-2 flex h-4 w-4 items-center justify-center rounded-full"
+            style={{ background: "var(--ink-soft)", color: "#fff" }}
+            aria-hidden
+          >
+            <svg
+              width="9"
+              height="9"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="5" y="11" width="14" height="10" rx="2" />
+              <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+          </span>
+        )}
       </div>
 
       {/* Arrow sources: rim dots, revealed on hover / selection.
-          Visuals + 28px touch hit area live in globals.css. */}
+          Visuals + touch hit area (fattened on coarse) live in globals.css. */}
       <Handle type="source" position={Position.Top} id="st" className="part-source-handle" />
       <Handle type="source" position={Position.Right} id="sr" className="part-source-handle" />
       <Handle type="source" position={Position.Bottom} id="sb" className="part-source-handle" />
@@ -159,5 +219,6 @@ export const PartNode = memo(function PartNode({
   prev.data.part === next.data.part &&
   prev.data.lifted === next.data.lifted &&
   prev.data.popKey === next.data.popKey &&
-  prev.data.revealKey === next.data.revealKey,
+  prev.data.revealKey === next.data.revealKey &&
+  prev.data.parked === next.data.parked,
 );

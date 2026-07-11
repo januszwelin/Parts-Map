@@ -8,6 +8,9 @@ import type { Arrow, Depth, Part } from "@/lib/types";
 export type AppApi = {
   updatePart: (id: string, patch: Partial<Part>) => void;
   deletePart: (id: string) => void;
+  /** Clone a part as a free-floating (off-body) copy offset from the
+   *  original, so it doesn't stack on the same anchor — ready to drag. */
+  duplicatePart: (id: string) => void;
   /** Text-authoritative location edit. Returns false when nothing matched. */
   setLocationText: (id: string, text: string) => boolean;
   /** Flip an on-body part between the front and back surface of its own
@@ -18,8 +21,9 @@ export type AppApi = {
   /** Draw an arrow between two parts by id — the pointer-free counterpart
    *  to dragging a connect dot, so the relationships that are the point of
    *  the tool are reachable by keyboard/switch users too. No-ops on a
-   *  self-link or an exact duplicate. */
-  connectParts: (sourceId: string, targetId: string) => void;
+   *  self-link or an exact duplicate; returns true only when an arrow was
+   *  actually created (callers close sheets on real creation only). */
+  connectParts: (sourceId: string, targetId: string) => boolean;
   /** Swap an arrow's source and target — IFS direction ("who protects
    *  whom") matters, and this beats delete-and-redraw. */
   reverseArrow: (id: string) => void;
@@ -29,6 +33,11 @@ export type AppApi = {
   /** The drag loop writes tilt/lag transforms straight to each card's
    *  inner element; nodes register those elements here. */
   registerPartInner: (id: string, el: HTMLDivElement | null) => void;
+  /** A drag attempt on a non-draggable card (locked, or parked on the
+   *  hidden surface) — React Flow emits nothing for those, so the card
+   *  itself reports the gesture and this answers with a refusal tick and
+   *  a one-line why. */
+  noticeBlockedDrag: (id: string) => void;
 };
 
 export const AppApiContext = React.createContext<AppApi | null>(null);
@@ -45,3 +54,10 @@ export const useAppApi = () => {
  *  keeping it out of node `data` preserves PartNode's memoization. */
 export const PartsListContext = React.createContext<Part[]>([]);
 export const usePartsList = () => React.useContext(PartsListContext);
+
+/** The live arrows array, for the same picker to grey out targets that
+ *  are already linked. Reactive on purpose (a ref getter would go stale —
+ *  the desktop popover stays open across picks); same subscription
+ *  reasoning as PartsListContext. */
+export const ArrowsListContext = React.createContext<Arrow[]>([]);
+export const useArrowsList = () => React.useContext(ArrowsListContext);

@@ -6,18 +6,22 @@
    ════════════════════════════════════════════════════════════════════ */
 
 import React, { useEffect, useRef, useState } from "react";
-import type { Arrow, Part } from "@/lib/types";
+import type { Arrow, Part, Depth } from "@/lib/types";
 import { partIsBack, locationDisplay } from "@/lib/part-utils";
 import { panelStyle } from "@/lib/ui";
 import {
   copyText,
-  relationshipsText,
+  mapText,
+  shareText,
+  shareFlowchartPng,
+  shareMapPng,
   downloadFlowchartPng,
   downloadMapPng,
 } from "@/lib/exports";
 import { useReducedMotion } from "@/hooks/use-media";
 import { LocationField } from "@/components/part-editor";
 import { BottomSheet } from "@/components/bottom-sheet";
+import { Icon, PATHS } from "@/components/phone-sheets";
 
 /** The list filter's state — only offered once the list is long enough to
  *  need it; clears itself whenever the list is put away. */
@@ -40,35 +44,48 @@ function useListQuery(parts: Part[], open: boolean) {
 }
 
 /** The copy/export actions, tucked behind a "⋯" menu — three text
- *  buttons sitting bare in the panel/sheet used to read as loose,
- *  unrelated chrome ("feels out of place"); one quiet trigger with a
- *  panelStyle dropdown reads as a single, intentional feature. Shared by
- *  the desktop panel and the phone sheet (the caller places it in its
- *  own header). `onOpenChange` is a hook for the tour (coach-marks) to
- *  notice the menu opening — optional, unused outside that. */
+ *  buttons sitting bare in the panel used to read as loose, unrelated
+ *  chrome ("feels out of place"); one quiet trigger with a panelStyle
+ *  dropdown reads as a single, intentional feature. DESKTOP ONLY: a
+ *  floating dropdown off a short bottom-anchored sheet ran past the
+ *  screen edge on phones — the phone sheet swaps its body to
+ *  `ListOptions` instead. `onOpenChange` is a hook for the tour
+ *  (coach-marks) to notice the menu opening — optional, unused outside
+ *  that. */
 function ExportMenu({
   parts,
   arrows,
   bodyScale,
-  phone,
+  view,
   onOpenChange,
   onNotice,
+  onSaveJson,
+  onLoadJson,
+  dirty,
 }: {
   parts: Part[];
   arrows: Arrow[];
   bodyScale: number;
-  phone?: boolean;
+  view: Depth;
   onOpenChange?: (open: boolean) => void;
   /** Failures used to be silent — the button just did nothing, which reads
    *  as broken rather than as "that didn't work." Mobile in-app browsers
    *  (Instagram/Slack webviews, etc.) are exactly where the clipboard
    *  fallback is most likely to actually fail. */
   onNotice?: (text: string) => void;
+  /** JSON save/load — the real, reloadable format. Now lives here (the
+   *  toolbar's primary Save exports an image instead). Desktop only; the
+   *  phone keeps these in the Share sheet to avoid two homes for the same
+   *  action. When present, a divider + "Save JSON"/"Load JSON" appear. */
+  onSaveJson?: () => void;
+  onLoadJson?: (file: File) => void;
+  /** Unsaved-changes cue for the JSON save row + the ⋯ trigger dot. */
+  dirty?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<"list" | "rel" | "flow" | "map" | null>(
-    null,
-  );
+  const fileRef = useRef<HTMLInputElement>(null);
+  const showJson = !!onSaveJson && !!onLoadJson;
+  const [copied, setCopied] = useState<"text" | "flow" | "map" | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onOpenChangeRef = useRef(onOpenChange);
   useEffect(() => {
@@ -77,35 +94,41 @@ function ExportMenu({
   useEffect(() => {
     onOpenChangeRef.current?.(open);
   }, [open]);
+  // Click-outside via a document listener, not a fixed-inset catcher: the
+  // desktop panel's translate-x and panelStyle's backdrop-filter both make
+  // ancestors containing blocks, so `fixed inset-0` only covered the panel
+  // and canvas clicks never closed the menu.
+  const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+    const onDown = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
   }, [open]);
 
-  const flash = (kind: "list" | "rel" | "flow" | "map") => {
+  const flash = (kind: "text" | "flow" | "map") => {
     setCopied(kind);
     if (copyTimer.current) clearTimeout(copyTimer.current);
     copyTimer.current = setTimeout(() => setCopied(null), 1400);
   };
-  const copy = async (kind: "list" | "rel") => {
-    const text =
-      kind === "list"
-        ? parts
-            .map(
-              (p) =>
-                `${p.name}\t${locationDisplay(p)}${p.note ? `\t${p.note}` : ""}`,
-            )
-            .join("\n")
-        : relationshipsText(parts, arrows);
-    if (!(await copyText(text))) {
+  const copyAll = async () => {
+    if (!(await copyText(mapText(parts, arrows)))) {
       onNotice?.("Couldn't copy — your browser may be blocking clipboard access.");
       return;
     }
-    flash(kind);
+    flash("text");
   };
   const exportFlow = async () => {
     if (!(await downloadFlowchartPng(parts, arrows))) {
@@ -115,90 +138,119 @@ function ExportMenu({
     flash("flow");
   };
   const exportMap = async () => {
-    if (!(await downloadMapPng(parts, arrows, bodyScale))) {
+    if (!(await downloadMapPng(parts, arrows, bodyScale, view))) {
       onNotice?.("Couldn't export the map image.");
       return;
     }
     flash("map");
   };
 
-  const rowCls = phone
-    ? "flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm hover:bg-black/5 disabled:opacity-40"
-    : "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-black/5 disabled:opacity-40";
+  const rowCls =
+    "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-black/5 disabled:opacity-40";
 
   return (
-    <div className="relative">
+    <div className="relative" ref={menuRef}>
       <button
         data-tour="export-menu"
         aria-label="More actions"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className={
-          phone
-            ? "flex h-9 w-9 items-center justify-center rounded-full text-base hover:bg-black/5"
-            : "flex h-7 w-7 items-center justify-center rounded-md text-sm hover:bg-black/5 pointer-coarse:h-9 pointer-coarse:w-9"
-        }
+        className="relative flex h-7 w-7 items-center justify-center rounded-md text-sm hover:bg-black/5 active:bg-black/10 pointer-coarse:h-10 pointer-coarse:w-10"
         style={{ color: "var(--ink-soft)" }}
+        title={showJson && dirty ? "Unsaved changes — Save JSON in this menu" : undefined}
       >
         ⋯
+        {showJson && dirty && (
+          <span
+            aria-hidden
+            className="absolute right-0.5 top-0.5 inline-block h-1.5 w-1.5 rounded-full"
+            style={{ background: "var(--accent)" }}
+          />
+        )}
       </button>
       {open && (
-        <>
-          {/* Click-outside catcher — sits under the menu, above everything else. */}
+        <div
+          role="menu"
+          className="fade-in absolute right-0 top-full z-20 mt-1 w-48 rounded-xl p-1.5"
+          style={panelStyle}
+        >
           <button
-            aria-hidden
-            tabIndex={-1}
-            className="fixed inset-0 z-10 cursor-default"
-            style={{ background: "transparent" }}
-            onClick={() => setOpen(false)}
-          />
-          <div
-            role="menu"
-            className="fade-in absolute right-0 top-full z-20 mt-1 w-48 rounded-xl p-1.5"
-            style={panelStyle}
+            role="menuitem"
+            className={rowCls}
+            style={{ color: "var(--ink-soft)" }}
+            onClick={copyAll}
+            disabled={!parts.length}
+            title="Copy the whole map as text — parts, locations, notes, relationships"
           >
-            <button
-              role="menuitem"
-              className={rowCls}
-              style={{ color: "var(--ink-soft)" }}
-              onClick={() => copy("list")}
-              disabled={!parts.length}
-            >
-              {copied === "list" ? "copied ✓" : "copy list"}
-            </button>
-            <button
-              role="menuitem"
-              className={rowCls}
-              style={{ color: "var(--ink-soft)" }}
-              onClick={() => copy("rel")}
-              disabled={!arrows.length}
-              title="Copy all arrows as a text flowchart"
-            >
-              {copied === "rel" ? "copied ✓" : "copy relationships"}
-            </button>
-            <button
-              role="menuitem"
-              className={rowCls}
-              style={{ color: "var(--ink-soft)" }}
-              onClick={exportFlow}
-              disabled={!arrows.length}
-              title="Download all arrows as a flowchart image"
-            >
-              {copied === "flow" ? "exported ✓" : "export flowchart"}
-            </button>
-            <button
-              role="menuitem"
-              className={rowCls}
-              style={{ color: "var(--ink-soft)" }}
-              onClick={exportMap}
-              disabled={!parts.length}
-              title="Download the body map, with every part in its real position"
-            >
-              {copied === "map" ? "exported ✓" : "export map image"}
-            </button>
-          </div>
-        </>
+            {copied === "text" ? "copied ✓" : "copy as text"}
+          </button>
+          <button
+            role="menuitem"
+            className={rowCls}
+            style={{ color: "var(--ink-soft)" }}
+            onClick={exportFlow}
+            disabled={!arrows.length}
+            title="Download all arrows as a flowchart image"
+          >
+            {copied === "flow" ? "exported ✓" : "export flowchart"}
+          </button>
+          <button
+            role="menuitem"
+            className={rowCls}
+            style={{ color: "var(--ink-soft)" }}
+            onClick={exportMap}
+            disabled={!parts.length}
+            title="Download the body map, with every part in its real position"
+          >
+            {copied === "map" ? "exported ✓" : "export map image"}
+          </button>
+          {showJson && (
+            <>
+              <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+              <button
+                role="menuitem"
+                className={rowCls}
+                style={{ color: "var(--ink-soft)" }}
+                onClick={() => {
+                  setOpen(false);
+                  onSaveJson!();
+                }}
+                title="Save the map as a reloadable JSON file"
+              >
+                <span className="flex-1">Save JSON</span>
+                {dirty && (
+                  <span
+                    aria-hidden
+                    className="ml-2 inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ background: "var(--accent)" }}
+                  />
+                )}
+              </button>
+              <button
+                role="menuitem"
+                className={rowCls}
+                style={{ color: "var(--ink-soft)" }}
+                onClick={() => fileRef.current?.click()}
+                title="Open a previously saved JSON map"
+              >
+                Load JSON
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onLoadJson!(f);
+                  e.target.value = "";
+                  setOpen(false);
+                }}
+              />
+            </>
+          )}
+        </div>
       )}
     </div>
   );
@@ -244,7 +296,7 @@ function PartRow({
     return (
       <button
         data-part-row={p.id}
-        className="flex min-h-12 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors active:bg-black/5"
+        className="flex min-h-12 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors active:bg-black/10"
         style={{ background: rowBg }}
         onClick={onTap}
       >
@@ -322,6 +374,7 @@ export function PartsListPanel({
   parts,
   arrows,
   bodyScale,
+  view,
   open,
   selectedId,
   onSelect,
@@ -329,10 +382,14 @@ export function PartsListPanel({
   onClose,
   onExportMenuOpenChange,
   onNotice,
+  onSaveJson,
+  onLoadJson,
+  dirty,
 }: {
   parts: Part[];
   arrows: Arrow[];
   bodyScale: number;
+  view: Depth;
   open: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -342,6 +399,10 @@ export function PartsListPanel({
   /** The tour's hook into the "⋯" menu opening — optional. */
   onExportMenuOpenChange?: (open: boolean) => void;
   onNotice?: (text: string) => void;
+  /** JSON save/load — surfaced in the ⋯ menu on desktop. */
+  onSaveJson?: () => void;
+  onLoadJson?: (file: File) => void;
+  dirty?: boolean;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
   const reducedMotion = useReducedMotion();
@@ -360,7 +421,7 @@ export function PartsListPanel({
   return (
     <div
       data-ui-chrome
-      className={`absolute bottom-[calc(72px+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] top-3 z-10 flex w-[min(264px,78vw)] flex-col rounded-2xl transition-transform duration-300 ease-out sm:bottom-3 sm:top-[68px] ${
+      className={`absolute bottom-[calc(72px+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] top-3 z-10 flex w-[min(264px,78vw)] flex-col rounded-2xl transition-transform duration-300 ease-out motion-reduce:transition-none sm:bottom-3 sm:top-[68px] ${
         open ? "translate-x-0" : "-translate-x-[120%]"
       }`}
       style={panelStyle}
@@ -377,12 +438,16 @@ export function PartsListPanel({
             parts={parts}
             arrows={arrows}
             bodyScale={bodyScale}
+            view={view}
             onOpenChange={onExportMenuOpenChange}
             onNotice={onNotice}
+            onSaveJson={onSaveJson}
+            onLoadJson={onLoadJson}
+            dirty={dirty}
           />
           <button
             aria-label="Close list"
-            className="rounded-md px-2 py-1 text-[11px] hover:bg-black/5 pointer-coarse:min-h-9 pointer-coarse:min-w-9"
+            className="rounded-md px-2 py-1 text-[11px] hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
             style={{ color: "var(--ink-faint)" }}
             onClick={onClose}
           >
@@ -402,6 +467,11 @@ export function PartsListPanel({
             value={query}
             placeholder="find a part…"
             aria-label="Filter parts"
+            enterKeyHint="search"
+            inputMode="search"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
@@ -437,32 +507,200 @@ export function PartsListPanel({
  *  sheet (grab strip, swipe to put away). Rows reveal rather than select:
  *  the sheet slides out of the way so the camera glide and reveal halo
  *  play unobstructed. */
+/** The list sheet's second page — Copy & export as full-width rows behind
+ *  a ‹ back, swapped into the sheet body in place (LocationPicker's
+ *  pattern). Replaces the desktop ⋯ dropdown here, which opened downward
+ *  off a short bottom-anchored sheet and ran past the screen edge.
+ *  Outcomes speak inline on the row itself — success and failure — so no
+ *  floating toast ever covers a sibling row. */
+function ListOptions({
+  parts,
+  arrows,
+  bodyScale,
+  view,
+  onBack,
+  onClose,
+}: {
+  parts: Part[];
+  arrows: Arrow[];
+  bodyScale: number;
+  view: Depth;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  const [flash, setFlash] = useState<{
+    id: string;
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mark = (id: string, ok: boolean, text: string) => {
+    setFlash({ id, ok, text });
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), ok ? 1400 : 2600);
+  };
+  // Share outcomes → row flash; null = the person closed the OS share
+  // sheet themselves, which deserves silence, not feedback.
+  const shareOutcome = (
+    s: "shared" | "copied" | "downloaded" | "cancelled" | "failed",
+  ) =>
+    s === "cancelled"
+      ? null
+      : s === "failed"
+        ? { ok: false, text: "Couldn't share" }
+        : {
+            ok: true,
+            text:
+              s === "shared"
+                ? "Shared ✓"
+                : s === "copied"
+                  ? "Copied ✓"
+                  : "Downloaded ✓",
+          };
+  const exportOutcome = (ok: boolean) => ({
+    ok,
+    text: ok ? "Exported ✓" : "Couldn't export",
+  });
+  const actions: {
+    id: string;
+    icon: string;
+    base: string;
+    disabled: boolean;
+    run: () => Promise<{ ok: boolean; text: string } | null>;
+  }[] = [
+    {
+      id: "text",
+      icon: PATHS.share,
+      base: "Share as text",
+      disabled: !parts.length,
+      run: async () => shareOutcome(await shareText(mapText(parts, arrows))),
+    },
+    {
+      id: "smap",
+      icon: PATHS.share,
+      base: "Share map image",
+      disabled: !parts.length,
+      run: async () =>
+        shareOutcome(await shareMapPng(parts, arrows, bodyScale, view)),
+    },
+    {
+      id: "sflow",
+      icon: PATHS.share,
+      base: "Share flowchart",
+      disabled: !arrows.length,
+      run: async () => shareOutcome(await shareFlowchartPng(parts, arrows)),
+    },
+    {
+      id: "map",
+      icon: PATHS.image,
+      base: "Export map image",
+      disabled: !parts.length,
+      run: async () =>
+        exportOutcome(await downloadMapPng(parts, arrows, bodyScale, view)),
+    },
+    {
+      id: "flow",
+      icon: PATHS.flow,
+      base: "Export flowchart",
+      disabled: !arrows.length,
+      run: async () => exportOutcome(await downloadFlowchartPng(parts, arrows)),
+    },
+  ];
+  return (
+    <div className="flex-1 overflow-y-auto overscroll-contain">
+      <div className="flex items-center gap-2 pb-1.5">
+        <button
+          aria-label="Back to the list"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base transition-opacity active:opacity-70 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+          style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
+          onClick={onBack}
+        >
+          ‹
+        </button>
+        <span
+          className="min-w-0 flex-1 truncate text-sm font-medium"
+          style={{ color: "var(--ink-soft)" }}
+        >
+          Copy & export
+        </span>
+        <button
+          aria-label="Close list"
+          className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+          style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
+          onClick={onClose}
+        >
+          Done
+        </button>
+      </div>
+      {actions.map((a) => (
+        <button
+          key={a.id}
+          className="flex min-h-12 w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left text-sm transition-colors hover:bg-black/5 active:bg-black/10 disabled:opacity-40"
+          style={
+            flash?.id === a.id && !flash.ok
+              ? { color: "var(--danger)" }
+              : { color: "var(--ink-soft)" }
+          }
+          disabled={a.disabled}
+          onClick={async () => {
+            const r = await a.run();
+            if (r) mark(a.id, r.ok, r.text);
+          }}
+        >
+          <Icon d={a.icon} />
+          {flash?.id === a.id ? flash.text : a.base}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function PhonePartsSheet({
   parts,
   arrows,
   bodyScale,
+  view,
   open,
   autoFocusSearch,
   onReveal,
   onClose,
   onExportMenuOpenChange,
-  onNotice,
 }: {
   parts: Part[];
   arrows: Arrow[];
   bodyScale: number;
+  view: Depth;
   open: boolean;
   /** Focus the filter as the sheet arrives — set when opened via the
    *  top-bar search rather than the list button. */
   autoFocusSearch?: boolean;
   onReveal: (id: string) => void;
   onClose: () => void;
-  /** The tour's hook into the "⋯" menu opening — optional. */
+  /** The tour's hook into the "⋯" options opening — optional. */
   onExportMenuOpenChange?: (open: boolean) => void;
-  onNotice?: (text: string) => void;
 }) {
   const { query, setQuery, shown } = useListQuery(parts, open);
   const searchRef = useRef<HTMLInputElement>(null);
+  // The ⋯ options page, swapped into the sheet body in place. Resets when
+  // the sheet is put away — through the same seam the ⋯ button reports on,
+  // so the app-level exportMenuOpen can't stick true after a close (a
+  // render-time reset here once bypassed the callback and made a re-run
+  // tour's list step auto-complete).
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const showOptions = (v: boolean) => {
+    setOptionsOpen(v);
+    // The tour's "list" step completes when the options open — same
+    // reporting seam the old dropdown drove.
+    onExportMenuOpenChange?.(v);
+  };
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (wasOpenRef.current && !open && optionsOpen) {
+      setOptionsOpen(false);
+      onExportMenuOpenChange?.(false);
+    }
+    wasOpenRef.current = open;
+  }, [open, optionsOpen, onExportMenuOpenChange]);
   useEffect(() => {
     if (open && autoFocusSearch) {
       const t = setTimeout(() => searchRef.current?.focus(), 120);
@@ -472,70 +710,90 @@ export function PhonePartsSheet({
 
   return (
     <BottomSheet open={open} onClose={onClose} label={`Parts (${parts.length})`}>
-      <div className="flex shrink-0 items-center justify-between pb-2">
-        <span className="text-sm font-medium" style={{ color: "var(--ink-soft)" }}>
-          Parts ({parts.length})
-        </span>
-        <div className="flex shrink-0 items-center gap-1">
-          <ExportMenu
-            parts={parts}
-            arrows={arrows}
-            bodyScale={bodyScale}
-            phone
-            onOpenChange={onExportMenuOpenChange}
-            onNotice={onNotice}
-          />
-          <button
-            aria-label="Close list"
-            className="shrink-0 rounded-full px-3 py-2 text-xs"
-            style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
-            onClick={onClose}
-          >
-            Done
-          </button>
-        </div>
-      </div>
-      {parts.length > 8 && (
-        <div className="shrink-0 pb-2">
-          <input
-            ref={searchRef}
-            className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-            style={{
-              background: "rgba(255,255,255,0.7)",
-              border: "1px solid var(--line)",
-              color: "var(--ink)",
-            }}
-            value={query}
-            placeholder="find a part…"
-            aria-label="Filter parts"
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
+      {optionsOpen ? (
+        <ListOptions
+          parts={parts}
+          arrows={arrows}
+          bodyScale={bodyScale}
+          view={view}
+          onBack={() => showOptions(false)}
+          onClose={onClose}
+        />
+      ) : (
+        <>
+          <div className="flex shrink-0 items-center justify-between pb-2">
+            <span className="text-sm font-medium" style={{ color: "var(--ink-soft)" }}>
+              Parts ({parts.length})
+            </span>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                data-tour="export-menu"
+                aria-label="Copy & export options"
+                aria-expanded={optionsOpen}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-base hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+                style={{ color: "var(--ink-soft)" }}
+                onClick={() => showOptions(true)}
+              >
+                ⋯
+              </button>
+              <button
+                aria-label="Close list"
+                className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+                style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
+                onClick={onClose}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+          {parts.length > 8 && (
+            <div className="shrink-0 pb-2">
+              <input
+                ref={searchRef}
+                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                style={{
+                  background: "rgba(255,255,255,0.7)",
+                  border: "1px solid var(--line)",
+                  color: "var(--ink)",
+                }}
+                value={query}
+                placeholder="find a part…"
+                aria-label="Filter parts"
+                enterKeyHint="search"
+                inputMode="search"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="-mx-1.5 flex-1 overflow-y-auto overscroll-contain">
+            {parts.length === 0 && (
+              <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
+                No parts yet. Tap + to add one, or Import a list.
+              </p>
+            )}
+            {parts.length > 0 && shown.length === 0 && (
+              <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
+                Nothing matches “{query.trim()}”.
+              </p>
+            )}
+            {shown.map((p) => (
+              <PartRow
+                key={p.id}
+                part={p}
+                phone
+                selected={false}
+                onTap={() => {
+                  onReveal(p.id);
+                  onClose();
+                }}
+              />
+            ))}
+          </div>
+        </>
       )}
-      <div className="-mx-1.5 flex-1 overflow-y-auto overscroll-contain">
-        {parts.length === 0 && (
-          <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
-            No parts yet. Tap + to add one, or Import a list.
-          </p>
-        )}
-        {parts.length > 0 && shown.length === 0 && (
-          <p className="px-2 py-6 text-center text-xs" style={{ color: "var(--ink-faint)" }}>
-            Nothing matches “{query.trim()}”.
-          </p>
-        )}
-        {shown.map((p) => (
-          <PartRow
-            key={p.id}
-            part={p}
-            phone
-            selected={false}
-            onTap={() => {
-              onReveal(p.id);
-              onClose();
-            }}
-          />
-        ))}
-      </div>
     </BottomSheet>
   );
 }

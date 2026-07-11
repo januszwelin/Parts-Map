@@ -65,7 +65,7 @@ export function LocationPicker({
         <button
           aria-label="Back"
           onClick={onDone}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base transition-opacity active:opacity-70"
           style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
         >
           ‹
@@ -84,6 +84,11 @@ export function LocationPicker({
         value={query}
         placeholder="search, or describe it — “behind me”…"
         aria-label="Search locations"
+        enterKeyHint="search"
+        inputMode="search"
+        autoCorrect="off"
+        autoCapitalize="none"
+        spellCheck={false}
         autoFocus
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => e.stopPropagation()}

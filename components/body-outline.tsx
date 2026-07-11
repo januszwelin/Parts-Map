@@ -21,8 +21,9 @@
 
 import React from "react";
 import { BODY_H, BODY_W, SPOT_R_FRAC } from "@/lib/tuning";
-import { figureCenterX, anchorToFlow, SNAP_SETS } from "@/lib/geometry";
+import { anchorToFlow, SNAP_SETS } from "@/lib/geometry";
 import { BODY_PATHS, BODY_BACK_DETAIL } from "@/lib/body-paths";
+import { useReducedMotion } from "@/hooks/use-media";
 import type { Depth } from "@/lib/types";
 
 const bodyStroke = {
@@ -64,9 +65,18 @@ const BodyArt = React.memo(function BodyArt({ back }: { back?: boolean }) {
   );
 });
 
-/** The two figures side by side — front on the viewer's left, back on
- *  the viewer's right — each with a quiet caption underneath. */
-export function BodyOutline({ bodyScale }: { bodyScale: number }) {
+/** One body centered at flow 0,0 — the surface `view` selects. Both
+ *  surfaces are mounted stacked and cross-faded on a flip (the outline is
+ *  nearly identical mirrored, so mostly the spine/blade detail + caption
+ *  swap). A quiet caption sits underneath. */
+export function BodyOutline({
+  bodyScale,
+  view,
+}: {
+  bodyScale: number;
+  view: Depth;
+}) {
+  const reduced = useReducedMotion();
   const w = BODY_W * bodyScale;
   const h = BODY_H * bodyScale;
   const caption: React.CSSProperties = {
@@ -81,16 +91,14 @@ export function BodyOutline({ bodyScale }: { bodyScale: number }) {
     textTransform: "uppercase",
     color: "var(--ink-faint)",
   };
-  const figure = (depth: Depth) => (
+  const layer = (depth: Depth) => (
     <div
       key={depth}
       style={{
         position: "absolute",
-        left: figureCenterX(depth, bodyScale) - w / 2,
-        top: -h / 2,
-        width: w,
-        height: h,
-        pointerEvents: "none",
+        inset: 0,
+        opacity: view === depth ? 1 : 0,
+        transition: reduced ? "none" : "opacity 360ms ease",
       }}
       aria-hidden
     >
@@ -99,10 +107,20 @@ export function BodyOutline({ bodyScale }: { bodyScale: number }) {
     </div>
   );
   return (
-    <>
-      {figure("front")}
-      {figure("back")}
-    </>
+    <div
+      style={{
+        position: "absolute",
+        left: -w / 2,
+        top: -h / 2,
+        width: w,
+        height: h,
+        pointerEvents: "none",
+      }}
+      aria-hidden
+    >
+      {layer("front")}
+      {layer("back")}
+    </div>
   );
 }
 
@@ -111,11 +129,14 @@ export function BodyOutline({ bodyScale }: { bodyScale: number }) {
  *  opacity animates (fade-out needs the DOM to still be there). */
 export const AnchorConstellation = React.memo(function AnchorConstellation({
   bodyScale,
+  view,
   visible,
   boost = false,
   spotRef,
 }: {
   bodyScale: number;
+  /** Only the shown surface's anchors are magnetic, so only they pulse. */
+  view: Depth;
   visible: boolean;
   /** Tap-to-place mode: the whole vocabulary of points steps forward
    *  (the person is choosing a home, not steering a drag). */
@@ -125,20 +146,18 @@ export const AnchorConstellation = React.memo(function AnchorConstellation({
    *  brighten, distant ones stay a whisper. */
   spotRef: React.RefObject<SVGCircleElement | null>;
 }) {
-  const dots = (["front", "back"] as const).map((depth) =>
-    SNAP_SETS[depth].map((r) => {
-      const a = anchorToFlow(r, depth, bodyScale);
-      return (
-        <circle
-          key={`${depth}:${r.key}`}
-          cx={a.x}
-          cy={a.y}
-          r={2 * bodyScale}
-          fill="var(--ink)"
-        />
-      );
-    }),
-  );
+  const dots = SNAP_SETS[view].map((r) => {
+    const a = anchorToFlow(r, view, bodyScale);
+    return (
+      <circle
+        key={r.key}
+        cx={a.x}
+        cy={a.y}
+        r={2 * bodyScale}
+        fill="var(--ink)"
+      />
+    );
+  });
   return (
     <svg
       className="anchor-constellation"

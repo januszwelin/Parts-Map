@@ -1,40 +1,16 @@
 "use client";
 
 /* ════════════════════════════════════════════════════════════════════
-   TOOLBAR — add/import/save/load/body-scale/sound chrome, plus the
-   floating frame-map button
+   TOOLBAR — add/import/save-image/body-scale chrome, plus the
+   floating frame-map button. (JSON save/load live in the parts-list ⋯
+   menu; the primary Save button exports a PNG image.)
    ════════════════════════════════════════════════════════════════════ */
 
 import { useEffect, useRef, useState } from "react";
 import { MIN_SCALE, MAX_SCALE } from "@/lib/tuning";
 import { panelStyle } from "@/lib/ui";
 import { authClient } from "@/lib/auth-client";
-
-/** Tiny speaker glyph for the sound toggle — quiet wave when on, a
- *  soft × when off. Inline SVG, app convention. */
-function SoundIcon({ on }: { on: boolean }) {
-  return (
-    <svg
-      width={14}
-      height={14}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ display: "block" }}
-      aria-hidden
-    >
-      <path d="M11 5 6 9H2v6h4l5 4V5Z" fill="currentColor" stroke="none" />
-      {on ? (
-        <path d="M15.5 8.5a5 5 0 0 1 0 7" />
-      ) : (
-        <path d="M16 9.5l5 5M21 9.5l-5 5" />
-      )}
-    </svg>
-  );
-}
+import { useIsPhone } from "@/hooks/use-media";
 
 /** Curved arrow — mirrored for redo. The only visible Undo/Redo affordance
  *  in the app; Ctrl/Cmd+Z has no equivalent on a touchscreen. */
@@ -60,8 +36,8 @@ function UndoIcon({ mirrored }: { mirrored?: boolean }) {
 
 export function Toolbar(props: {
   onAdd: (name: string) => void;
-  /** The name field lives in the parent so cancelling a tap-to-place
-   *  can hand the typed name back to the input. */
+  /** The name field's text lives in the parent (shared with the phone
+   *  Create sheet), so it's cleared centrally after an add. */
   nameValue: string;
   onNameChange: (v: string) => void;
   onImportOpen: () => void;
@@ -69,17 +45,16 @@ export function Toolbar(props: {
   onBodyScale: (v: number) => void;
   autoScale: boolean;
   onAutoScale: (v: boolean) => void;
-  onSave: () => void;
-  onLoad: (file: File) => void;
+  /** The primary Save button now exports the map as a PNG image; JSON
+   *  save/load moved into the parts-list ⋯ menu. */
+  onSaveImage: () => void;
+  /** Clear the whole map (undoable) — lives in the account/options popover. */
+  onClearMap: () => void;
   listOpen: boolean;
   onToggleList: () => void;
-  soundOn: boolean;
-  onToggleSound: () => void;
   onShowWelcome: () => void;
   onOpenMyMaps: () => void;
   onSaveToCloud: () => void;
-  /** Save/sync state for the quiet indicator on the Save control. */
-  saveStatus: "clean" | "dirty" | "saving" | "saved";
   /** Opt-in local draft (keeps work across an accidental tab-close). */
   draftEnabled: boolean;
   onToggleDraft: (on: boolean) => void;
@@ -95,8 +70,10 @@ export function Toolbar(props: {
 }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const isPhone = useIsPhone();
   const { data: session } = authClient.useSession();
   const deleteAccount = async () => {
     if (deleting) return;
@@ -116,7 +93,6 @@ export function Toolbar(props: {
     }
     window.location.reload();
   };
-  const fileRef = useRef<HTMLInputElement>(null);
   const submit = () => {
     const n = props.nameValue.trim();
     if (!n) return;
@@ -126,19 +102,32 @@ export function Toolbar(props: {
   const closePopovers = () => {
     setAccountOpen(false);
     setConfirmDelete(false);
+    setConfirmClear(false);
     setDeleteError(null);
   };
-  // The account popover previously only closed via the click-outside
-  // catcher below — unusable by keyboard/switch users, since nothing else
-  // was reachable to dismiss it.
+  // Click-outside via a document listener — a `fixed inset-0` catcher
+  // here would be trapped by the toolbar pill's backdrop-filter (it makes
+  // this a containing block), so it never covered the canvas. Escape
+  // stays for keyboard/switch users.
+  const accountRef = useRef<HTMLDivElement>(null);
   const anyPopoverOpen = accountOpen;
   useEffect(() => {
     if (!anyPopoverOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closePopovers();
+    const onDown = (e: PointerEvent) => {
+      if (!accountRef.current?.contains(e.target as Node)) closePopovers();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closePopovers();
+      }
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
   }, [anyPopoverOpen]);
   const btn =
     "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-10";
@@ -173,19 +162,19 @@ export function Toolbar(props: {
   return (
     // Classic top bar — desktop / wide layouts only. Phones get the
     // Miro-style top bar + bottom quick-tools pill + sheets instead
-    // (rendered separately in parts-map-app), so this is `hidden sm:flex`.
+    // (rendered separately in parts-map-app). CSS-hidden below `sm` AND
+    // JS-hidden whenever useIsPhone says phone: a landscape phone is
+    // ≥640px wide, so the breakpoint alone would paint this desktop bar
+    // over the phone dialect (useIsPhone starts false, so first paint
+    // still matches the SSR markup).
     <div
       data-ui-chrome
-      className="pointer-events-none absolute inset-x-0 top-0 z-20 hidden justify-center p-3 sm:flex"
+      className={`pointer-events-none absolute inset-x-0 top-0 z-20 hidden justify-center p-3 ${isPhone ? "" : "sm:flex"}`}
     >
       <div
         className="pointer-events-auto relative flex w-auto max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-2xl px-3 py-2"
         style={{ ...panelStyle, touchAction: "manipulation" }}
       >
-        {accountOpen && (
-          <div className="fixed inset-0" onClick={closePopovers} />
-        )}
-
         <button
           data-tour="list"
           aria-label="Toggle parts list"
@@ -268,45 +257,12 @@ export function Toolbar(props: {
         </label>
         <div className="hidden h-4 w-px sm:block" style={{ background: "var(--line)" }} />
         <button
-          className={`${btn} hidden items-center gap-1.5 sm:inline-flex`}
-          style={{ color: "var(--ink-soft)" }}
-          onClick={props.onSave}
-          aria-live="polite"
-          title={
-            props.saveStatus === "dirty"
-              ? "Unsaved changes — Save to a file"
-              : props.saveStatus === "saving"
-                ? "Saving…"
-                : props.saveStatus === "saved"
-                  ? "All changes saved"
-                  : "Save to a file"
-          }
-        >
-          {props.saveStatus === "saving" ? "Saving…" : "Save"}
-          {props.saveStatus === "dirty" && (
-            <span
-              aria-hidden
-              className="inline-block h-1.5 w-1.5 rounded-full"
-              style={{ background: "var(--accent)" }}
-            />
-          )}
-        </button>
-        <button
           className={`${btn} hidden sm:block`}
           style={{ color: "var(--ink-soft)" }}
-          onClick={() => fileRef.current?.click()}
+          onClick={props.onSaveImage}
+          title="Save the map as an image (PNG). JSON save/load live in the list ⋯ menu."
         >
-          Load
-        </button>
-        <button
-          className={`${btn} hidden shrink-0 sm:block`}
-          style={{ color: "var(--ink-soft)" }}
-          aria-label="Sound"
-          aria-pressed={props.soundOn}
-          title={props.soundOn ? "Sound on" : "Sound off"}
-          onClick={props.onToggleSound}
-        >
-          <SoundIcon on={props.soundOn} />
+          Save image
         </button>
         <button
           className={`${btn} hidden shrink-0 sm:block`}
@@ -318,7 +274,7 @@ export function Toolbar(props: {
           ?
         </button>
         {session ? (
-          <div className="relative hidden shrink-0 sm:block">
+          <div className="relative hidden shrink-0 sm:block" ref={accountRef}>
             <button
               aria-label="Account"
               className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium text-white"
@@ -379,6 +335,41 @@ export function Toolbar(props: {
                   Local draft
                 </label>
                 <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+                {confirmClear ? (
+                  <div className="px-2 py-1">
+                    <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      Clear the whole map? You can undo this.
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
+                        onClick={() => {
+                          closePopovers();
+                          props.onClearMap();
+                        }}
+                      >
+                        Clear
+                      </button>
+                      <button
+                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        style={{ color: "var(--ink-soft)" }}
+                        onClick={() => setConfirmClear(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                    style={{ color: "var(--ink-soft)" }}
+                    onClick={() => setConfirmClear(true)}
+                  >
+                    Clear map
+                  </button>
+                )}
+                <div className="my-1 h-px" style={{ background: "var(--line)" }} />
                 {confirmDelete ? (
                   <div className="px-2 py-1">
                     <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
@@ -432,18 +423,6 @@ export function Toolbar(props: {
             Sign in
           </a>
         )}
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".json,application/json"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) props.onLoad(f);
-            e.target.value = "";
-          }}
-        />
       </div>
     </div>
   );
@@ -453,13 +432,20 @@ export function Toolbar(props: {
  *  frame-map control is a standalone floating button — always in the same
  *  corner on both layouts, big enough to hit without looking. */
 export function FrameMapButton({ onFrame }: { onFrame: () => void }) {
+  // Landscape phones are ≥640px wide: the `sm:` offset is for real
+  // desktops only, so it yields to the phone clearance whenever
+  // useIsPhone says phone (same JS-override pattern as the top bars).
+  const isPhone = useIsPhone();
   return (
     <button
       data-ui-chrome
       data-tour="frame"
       aria-label="Frame the map"
       title="Frame the map"
-      className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3 z-20 flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-black/5 sm:bottom-10"
+      // panelStyle's inline background beats hover:/active:bg — the press
+      // reads as a small scale dip instead (the hover wash was already
+      // dead for the same reason).
+      className={`absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] z-20 flex h-11 w-11 items-center justify-center rounded-full transition-transform active:scale-95 motion-reduce:active:scale-100 ${isPhone ? "" : "sm:bottom-10"}`}
       style={{ ...panelStyle, touchAction: "manipulation" }}
       onClick={onFrame}
     >

@@ -44,6 +44,37 @@ export function WelcomeModal({
         className="w-full max-w-sm rounded-2xl p-5 text-center"
         style={{ ...panelStyle, background: "#FDFCFA" }}
       >
+        {/* A tiny living picture of the whole idea: a part finds its
+            place on the body. The dot glides in, settles on the chest
+            with a soft ring, and repeats — static (dot at rest on the
+            chest) under reduced motion. */}
+        <div aria-hidden className="flex justify-center pb-1">
+          <svg width="132" height="100" viewBox="0 0 132 100" fill="none">
+            <circle
+              cx="66"
+              cy="24"
+              r="13"
+              stroke="var(--line)"
+              strokeWidth="2"
+            />
+            <path
+              d="M32 94c2.5-23 16-36 34-36s31.5 13 34 36"
+              stroke="var(--line)"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <circle
+              className="welcome-ripple"
+              cx="66"
+              cy="72"
+              r="9"
+              stroke="var(--accent)"
+              strokeWidth="1.5"
+              opacity="0"
+            />
+            <circle className="welcome-dot" cx="66" cy="72" r="6" fill="var(--accent)" />
+          </svg>
+        </div>
         <h2 id="welcome-modal-title" className="text-base font-medium" style={{ color: "var(--ink)" }}>
           Welcome to Parts Map
         </h2>
@@ -56,21 +87,21 @@ export function WelcomeModal({
         </p>
         <div className="mt-4 flex flex-col gap-2">
           <button
-            className="rounded-xl px-4 py-2.5 text-sm text-white transition-opacity hover:opacity-90"
+            className="min-h-11 rounded-xl px-4 py-2.5 text-sm text-white transition-opacity hover:opacity-90"
             style={{ background: "var(--accent)" }}
             onClick={onStartTour}
           >
             Show me around
           </button>
           <button
-            className="rounded-xl px-4 py-2.5 text-sm hover:bg-black/5"
+            className="min-h-11 rounded-xl px-4 py-2.5 text-sm hover:bg-black/5"
             style={{ color: "var(--ink-soft)" }}
             onClick={onExplore}
           >
             Explore an example
           </button>
           <button
-            className="rounded-xl px-4 py-2.5 text-sm hover:bg-black/5"
+            className="min-h-11 rounded-xl px-4 py-2.5 text-sm hover:bg-black/5"
             style={{ color: "var(--ink-soft)" }}
             onClick={onClose}
           >

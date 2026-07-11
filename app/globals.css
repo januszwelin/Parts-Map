@@ -54,8 +54,8 @@ body {
 /* ————— Keyboard focus —————
    Nothing showed a focus state before, so keyboard and switch users had no
    idea where they were. A single calm accent ring on real keyboard focus
-   only (:focus-visible never fires on mouse click). Static — no motion, so
-   nothing to gate on reduced-motion. */
+   (buttons/links never match :focus-visible on mouse click). Static — no
+   motion, so nothing to gate on reduced-motion. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -63,6 +63,15 @@ body {
 .react-flow__node:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+/* Form fields draw the ring INSET instead. Editable elements match
+   :focus-visible on tap too, and the 2px-outside ring was sliced flush by
+   the sheets' overflow-y-auto bodies wherever a field spans full width
+   ("stroke touching the sheet edge"). At -2px the ring occupies exactly
+   the field's 1px --line border band plus 1px inside — it reads as the
+   border warming to accent, can never be clipped, and never doubles up. */
+:is(input, textarea, select):focus-visible {
+  outline-offset: -2px;
 }
 
 /* ————— Part card lift choreography —————
@@ -85,6 +94,13 @@ body {
 .part-inner.lifted {
   box-shadow: var(--shadow-lift);
   opacity: 0.85;
+}
+/* Parked in a side lane (its surface isn't the one shown) — quietly
+   backgrounded, but its color still reads. Fades via .part-inner's own
+   opacity transition as a flip moves it. */
+.part-inner.parked {
+  opacity: 0.5;
+  box-shadow: var(--shadow-rest);
 }
 
 /* ————— Lift target indicator ————— */
@@ -191,8 +207,21 @@ input[type="range"]::-moz-range-thumb {
     margin-top: -8px;
   }
   input[type="range"]::-moz-range-thumb {
-    width: 15px;
-    height: 15px;
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* Touch keyboards: iOS Safari zooms the whole page when a focused field
+   renders under 16px (the viewport deliberately keeps user zoom enabled).
+   Coarse pointers get 16px fields across the board; desktop keeps its
+   denser sizes. Unlayered on purpose — it must beat the text-sm/text-xs
+   utilities on the fields themselves. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
   }
 }
 
@@ -262,6 +291,11 @@ input[type="range"]::-moz-range-thumb {
 @media (pointer: coarse) {
   .part-source-handle.react-flow__handle {
     opacity: 0.45;
+    /* Fatter hit zone for fingers (the dot stays small — RF centers the
+       handle on the rim, so the box can grow without moving the visual).
+       A selected ~140px card still keeps a wide center strip for grabs. */
+    width: 36px;
+    height: 36px;
   }
   .part-source-handle.react-flow__handle::after {
     width: 9px;
@@ -393,6 +427,106 @@ input[type="range"]::-moz-range-thumb {
   animation: coach-bob 1150ms cubic-bezier(0.25, 0.7, 0.4, 1) infinite;
 }
 
+/* Tour spotlight ring — breathes around the target at the same cadence
+   as the anchor pulse. */
+@keyframes coach-spot {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.045);
+    opacity: 0.95;
+  }
+}
+.coach-spot {
+  animation: coach-spot 1150ms ease-in-out infinite;
+}
+
+/* Locked-tour nudge — the callout bubble gives one small firm pulse when
+   the lock guard swallows a tap elsewhere, so the block reads as "over
+   here", not a dead button. Replayed by remounting the bubble. */
+@keyframes coach-nudge {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.coach-nudge {
+  animation: coach-nudge 380ms cubic-bezier(0.25, 0.7, 0.4, 1);
+}
+
+/* Welcome vignette — the part-dot glides in and settles on the chest,
+   a soft ring breathes out at touchdown, then it rests and repeats. */
+@keyframes welcome-dot {
+  0% {
+    transform: translate(46px, -34px);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  42% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+}
+.welcome-dot {
+  animation: welcome-dot 3.6s cubic-bezier(0.33, 1, 0.68, 1) infinite;
+}
+@keyframes welcome-ripple {
+  0%,
+  40% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  52% {
+    opacity: 0.7;
+  }
+  78%,
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+.welcome-ripple {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: welcome-ripple 3.6s ease-out infinite;
+}
+
+/* Tour completion — one soft accent wash over the whole stage, then
+   gone (its animationend retires the element). */
+@keyframes tour-done {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.tour-done {
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--accent) 20%, transparent) 0%,
+    transparent 72%
+  );
+  opacity: 0;
+  animation: tour-done 1600ms ease-out forwards;
+}
+
 /* ————— Reduced motion —————
    The drag-follow camera already opts out (handled in JS); quiet the
    decorative animations too. */
@@ -423,7 +557,20 @@ input[type="range"]::-moz-range-thumb {
       box-shadow 120ms ease,
       opacity 120ms ease;
   }
-  .coach-bob {
+  .coach-bob,
+  .coach-nudge {
+    animation: none;
+  }
+  /* Spotlight ring holds steady; the vignette dot rests on the chest
+     (its base position); the ripple and completion wash stay invisible
+     (base opacity 0 — the wash is also JS-gated off entirely). */
+  .coach-spot {
+    animation: none;
+    opacity: 0.75;
+  }
+  .welcome-dot,
+  .welcome-ripple,
+  .tour-done {
     animation: none;
   }
 }

@@ -86,6 +86,7 @@ export function parseMapJson(json: string): MapDoc {
       color: safeColor(p.color, PALETTE[i % 8]),
       fontSize: p.fontSize === "s" || p.fontSize === "l" ? p.fontSize : "m",
       bold: !!p.bold,
+      underline: p.underline === true ? true : undefined,
       shape:
         p.shape === "square" || p.shape === "pill" || p.shape === "ellipse"
           ? p.shape
@@ -96,6 +97,7 @@ export function parseMapJson(json: string): MapDoc {
         typeof p.note === "string" && p.note.trim()
           ? p.note.trim().slice(0, 500)
           : undefined,
+      locked: p.locked === true ? true : undefined,
     };
   });
   const ids = new Set(parts.map((p) => p.id));

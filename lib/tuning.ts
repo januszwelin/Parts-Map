@@ -9,10 +9,19 @@ export const BODY_H = 1000;
 const BODY_ASPECT = 0.46;
 export const BODY_W = BODY_H * BODY_ASPECT;
 
-/** Horizontal gap between the two figures (flow units, unscaled). */
+/** Horizontal gap between the two figures (flow units, unscaled).
+ *  Legacy from the side-by-side layout; kept for any older references. */
 export const VIEW_GAP = 150;
-/** Full scene width: two figures plus the gap. */
+/** Full scene width: two figures plus the gap (legacy side-by-side). */
 export const SCENE_W = BODY_W * 2 + VIEW_GAP;
+
+/** Single-body view: the shown surface sits centered at x=0; the hidden
+ *  surface's parts rest in a side lane of this width on each edge, so
+ *  they read as "on the other side" without leaving the frame. */
+export const PARK_LANE = 210;
+/** Scene width for the single centered body plus its two park lanes —
+ *  drives the initial framing and the pan bounds. */
+export const SINGLE_SCENE_W = BODY_W + 2 * PARK_LANE;
 
 /** How far past the scene (and any off-body parts) the pan can still
  *  wander — generous enough that fitAll's own framing and the drag-follow
@@ -37,7 +46,7 @@ export const STICK_RELEASE = 1.35;
  *  the state from flapping at the boundary. */
 export const AIM_ENTER_SPD = 380;
 export const AIM_EXIT_SPD = 750;
-/** Minimum gap between magnet ticks (sound + haptic), ms. */
+/** Minimum gap between magnet haptic ticks, ms. */
 export const TICK_MIN_MS = 60;
 
 /** Pointer-speed smoothing time constant (ms) — frame-rate independent;
@@ -88,31 +97,40 @@ export const TOUCH_STEER_OFFSET = 52;
 export const MIN_SCALE = 0.6;
 export const MAX_SCALE = 3.0;
 
-/** Muted card palette — sage, clay, dusty blue, mauve, sand, slate, blush, fog. */
+/** Muted card palette — sage, clay, dusty blue, mauve, sand, slate, blush,
+ *  fog. Client-supplied hex set (2026-07); slot order/names preserved so
+ *  positional consumers (sample-map indices, persistence `% 8` fallback)
+ *  stay meaningful. */
 export const PALETTE = [
-  "#DCE3D5",
-  "#E8D8CC",
-  "#D3DEE6",
-  "#E0D6E2",
-  "#EAE3D0",
-  "#D5DBDE",
-  "#EBDBD8",
-  "#E7E5E0",
+  "#DCE7D1",
+  "#EFD5C3",
+  "#CEDEEA",
+  "#E0D2E5",
+  "#F1E6C9",
+  "#D3DBE0",
+  "#EFD7D3",
+  "#E8E6DE",
 ] as const;
 
 /** Human-readable names for PALETTE, in the same order — a screen reader
- *  announcing "Color #dce3d5" is meaningless; this is what the hex should
- *  actually be labeled as. */
+ *  announcing "Color #dce7d1" is meaningless; this is what the hex should
+ *  actually be labeled as. Keys are the exact uppercase hex strings. */
 export const PALETTE_NAMES: Record<string, string> = {
-  "#DCE3D5": "sage",
-  "#E8D8CC": "clay",
-  "#D3DEE6": "dusty blue",
-  "#E0D6E2": "mauve",
-  "#EAE3D0": "sand",
-  "#D5DBDE": "slate",
-  "#EBDBD8": "blush",
-  "#E7E5E0": "fog",
+  "#DCE7D1": "sage",
+  "#EFD5C3": "clay",
+  "#CEDEEA": "dusty blue",
+  "#E0D2E5": "mauve",
+  "#F1E6C9": "sand",
+  "#D3DBE0": "slate",
+  "#EFD7D3": "blush",
+  "#E8E6DE": "fog",
 };
+
+/** Arrows are always this near-black now (client asked for black-only
+ *  arrows — the per-arrow color picker was removed). One place to tune the
+ *  exact shade. Reads as black on the warm --canvas without the harshness
+ *  of pure #000. Still WCAG-fine as a 2px stroke / arrowhead. */
+export const ARROW_INK = "#33302C";
 
 /** Two entries darkened slightly from their original values (#B08968 →
  *  #AA8261, #C08A8A → #B07C7C) — both fell under WCAG 1.4.11's 3:1 minimum
