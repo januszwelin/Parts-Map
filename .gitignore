@@ -49,6 +49,12 @@ next-env.d.ts
 /parts_map_build_prompt.md
 /parts_map_handoff_checklist.md
 /parts_map_ui_enhancement_prompt.md
+/skills-lock.json
+
+# local design references & scratch (not part of the shipped app)
+/references/
+/image.png
+/tes.txt
 
 # editors
 .vscode/*
