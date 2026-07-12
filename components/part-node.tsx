@@ -31,6 +31,9 @@ export type PartNodeType = Node<
     /** At most one node is selected — the desktop marquee can select
      *  several, and the edit popover must not open once per card. */
     solo: boolean;
+    /** The whole multi-selection drags together (every member off-body)
+     *  — the refusal probe must stay quiet for these. */
+    groupDrag: boolean;
   },
   "part"
 >;
@@ -50,7 +53,7 @@ export const PartNode = memo(function PartNode({
   selected,
   dragging,
 }: NodeProps<PartNodeType>) {
-  const { part, lifted, popKey, revealKey, parked, solo } = data;
+  const { part, lifted, popKey, revealKey, parked, solo, groupDrag } = data;
   const api = useAppApi();
   const onBackSurface = !part.offBody && partSurface(part) === "back";
   const connectionInProgress = useConnection((c) => c.inProgress);
@@ -71,7 +74,7 @@ export const PartNode = memo(function PartNode({
   // with a refusal tick + a one-line why via api.noticeBlockedDrag.
   // Tap-select still works: nothing here stops propagation.
   const inMulti = !!selected && !solo;
-  const refuse = parked || !!part.locked || inMulti;
+  const refuse = parked || !!part.locked || (inMulti && !groupDrag);
   const tugRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   const refuseProbe = refuse
     ? {
@@ -227,7 +230,10 @@ export const PartNode = memo(function PartNode({
   prev.data.popKey === next.data.popKey &&
   prev.data.revealKey === next.data.revealKey &&
   prev.data.parked === next.data.parked &&
-  // Only selected cards render anything solo-dependent (the toolbar), so
-  // unselected cards can skip reconciling on every selection change.
-  (prev.data.solo === next.data.solo || !next.selected),
+  // Only selected cards render anything solo/groupDrag-dependent (the
+  // toolbar, the refusal probe), so unselected cards can skip
+  // reconciling on every selection change.
+  ((prev.data.solo === next.data.solo &&
+    prev.data.groupDrag === next.data.groupDrag) ||
+    !next.selected),
 );

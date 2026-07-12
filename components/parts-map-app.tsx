@@ -228,10 +228,26 @@ function PartsMapApp() {
   const setSelectedEdgeId = useCallback((id: string | null) => {
     setSelectedEdgeIds(id ? new Set([id]) : EMPTY_SET);
   }, []);
+  // Mirror for gesture handlers (drag start fires from RF, outside the
+  // render that produced the selection) — synced in an effect below.
+  const selectedIdsRef = useRef<ReadonlySet<string>>(EMPTY_SET);
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
   const [dragOverride, setDragOverride] = useState<{
     id: string;
     pos: XYPosition;
   } | null>(null);
+  // Off-body GROUP drag (a multi-selection where every member is
+  // off-body): RF natively drags the whole selection — no lift/magnet
+  // choreography — and its per-node position changes fold into this
+  // transient map, one setState per change batch. The ref names the
+  // dragged ids for the duration of the gesture.
+  const [multiDrag, setMultiDrag] = useState<ReadonlyMap<
+    string,
+    XYPosition
+  > | null>(null);
+  const multiDragRef = useRef<ReadonlySet<string> | null>(null);
   // React Flow's DOM measurements, echoed back through the controlled
   // `nodes` prop so RF considers nodes initialized (else dragging logs
   // error #015 and useNodesInitialized never turns true). Never written
@@ -1620,6 +1636,46 @@ function PartsMapApp() {
       // Grabbing a part is engaging with the map — the follow-camera will
       // move the viewport, so the auto-re-frame must not fire under it.
       userAdjustedRef.current = true;
+      // ——— off-body GROUP drag ———
+      // A multi-selection whose every member is off-body drags natively
+      // as a group: RF moves the whole selection itself, so NONE of the
+      // single-node lift/magnet choreography below may run (it's all
+      // keyed on one id). Positions stream through onNodesChange into
+      // the multiDrag map; onNodeDragStop persists them in one pass.
+      {
+        const sel = selectedIdsRef.current;
+        if (
+          sel.size > 1 &&
+          sel.has(node.id) &&
+          [...sel].every(
+            (id) => partsRef.current.find((p) => p.id === id)?.offBody,
+          )
+        ) {
+          cancelAnimationFrame(restoreRafRef.current);
+          cancelAnimationFrame(glideRafRef.current);
+          const session: ReadonlySet<string> = new Set(sel);
+          multiDragRef.current = session;
+          // RF can abort a drag without firing onNodeDragStop (deletion,
+          // pinch second-touch) — same teardown insurance as the lift.
+          const relief = () => {
+            window.removeEventListener("pointerup", relief, true);
+            window.removeEventListener("touchend", relief, true);
+            window.removeEventListener("touchcancel", relief, true);
+            setTimeout(() => {
+              if (multiDragRef.current === session) {
+                multiDragRef.current = null;
+                setMultiDrag(null);
+              }
+            }, 400);
+          };
+          window.addEventListener("pointerup", relief, true);
+          window.addEventListener("touchend", relief, true);
+          window.addEventListener("touchcancel", relief, true);
+          haptic(6);
+          setSelectedEdgeId(null);
+          return;
+        }
+      }
       // Own the override from frame one — a regrab mid-settle must not
       // flash at the derived position while the loop spins up.
       setDragOverride({ id: node.id, pos: { ...node.position } });
@@ -1760,7 +1816,41 @@ function PartsMapApp() {
   }, []);
 
   const onNodeDragStop = useCallback(
-    () => {
+    (_e: MouseEvent | TouchEvent, _node: Node, draggedNodes: Node[]) => {
+      // ——— off-body group drag: persist every member in one pass ———
+      const group = multiDragRef.current;
+      if (group) {
+        multiDragRef.current = null;
+        const scale = bodyScaleRef.current;
+        const moved = draggedNodes.filter((n) => group.has(n.id));
+        if (moved.length) {
+          pushHistory(
+            "move-multi",
+            `moved ${moved.length} part${moved.length === 1 ? "" : "s"}`,
+          );
+          const posById = new Map(moved.map((n) => [n.id, n.position]));
+          setParts((ps) =>
+            ps.map((p) => {
+              const pos = posById.get(p.id);
+              return pos
+                ? {
+                    ...p,
+                    offBody: true,
+                    freePos: { ...pos },
+                    location: nearestOffZone(pos, scale),
+                    depth: "front" as const,
+                  }
+                : p;
+            }),
+          );
+          haptic(6);
+          autoArmedRef.current = true;
+        }
+        // Same batch as setParts — the cards re-derive from freePos at
+        // the exact positions the override map held, no flash.
+        setMultiDrag(null);
+        return;
+      }
       cancelAnimationFrame(liftRafRef.current);
       const info = liftInfoRef.current;
       liftInfoRef.current = null;
@@ -1899,9 +1989,17 @@ function PartsMapApp() {
         }
       }
     }
+    const multiMoves: [string, XYPosition][] = [];
     for (const ch of changes) {
       if (ch.type === "position" && ch.position) {
-        if (liftInfoRef.current?.id === ch.id) {
+        if (multiDragRef.current?.has(ch.id)) {
+          // Off-body group drag: RF moves every selected card; fold the
+          // whole batch into one map update below. The final
+          // dragging:false changes are deliberately ignored — they must
+          // not fall through to the keyboard-nudge commit, which would
+          // magnet-resolve each card; onNodeDragStop persists the group.
+          if (ch.dragging) multiMoves.push([ch.id, ch.position]);
+        } else if (liftInfoRef.current?.id === ch.id) {
           // The lift loop owns the dragged card's override — the cursor
           // holds the card by its center, recomputed from the live
           // pointer; RF's grab-offset position would fight it.
@@ -1958,6 +2056,13 @@ function PartsMapApp() {
       } else if (ch.type === "remove") {
         removed.push(ch.id);
       }
+    }
+    if (multiMoves.length) {
+      setMultiDrag((prev) => {
+        const next = new Map(prev);
+        for (const [id, pos] of multiMoves) next.set(id, pos);
+        return next;
+      });
     }
     // A marquee (de)selects several nodes in one change batch — fold them
     // into ONE set update so intermediate states never render.
@@ -2324,7 +2429,9 @@ function PartsMapApp() {
         setNotice(
           reason === "multi"
             ? {
-                text: "Several parts are selected — drag them one at a time",
+                // Fires only for mixed/on-body multi-selections — an
+                // all-off-body selection drags together (groupDrag).
+                text: "On-body parts move one at a time — this group can't move together",
                 key: noticeKey(),
               }
             : p.locked
@@ -3049,6 +3156,15 @@ function PartsMapApp() {
   /* ——— derived views: one parts array → nodes + list ——— */
   const nodes: Node[] = useMemo(() => {
     const posMap = derivePositions(parts, bodyScale, view);
+    // A multi-selection drags as a GROUP only when every member is
+    // off-body — free cards have no anchors to be text-authoritative
+    // about. Any on-body/locked member keeps the marquee select-only.
+    const groupDrag =
+      selectedIds.size > 1 &&
+      [...selectedIds].every((id) => {
+        const p = parts.find((q) => q.id === id);
+        return !!p && p.offBody && !p.locked;
+      });
     return parts.map((p) => {
       const md = measuredDims.get(p.id);
       // On-body but on the hidden surface → resting in a side lane.
@@ -3056,26 +3172,28 @@ function PartsMapApp() {
       return {
         id: p.id,
         type: "part" as const,
-        // A drag override wins; else the flip animation's transient position;
-        // else the derived (view-aware) position.
+        // A drag override wins; else the group drag's transient position;
+        // else the flip animation's; else the derived (view-aware) one.
         position:
           dragOverride?.id === p.id
             ? dragOverride.pos
-            : viewAnim?.get(p.id) ?? posMap.get(p.id)!,
+            : multiDrag?.get(p.id) ??
+              viewAnim?.get(p.id) ??
+              posMap.get(p.id)!,
         // Locked cards can't be dragged or key-deleted (they stay selectable
         // so the lock can be toggled off; the toolbar's explicit confirm-
         // delete calls api.deletePart directly and still works). Parked
         // cards don't drag either — flip to their side to move them. A
-        // multi-selected card doesn't drag either: the marquee is select-
-        // only (group delete), because on-body positions are text-
+        // multi-selected card drags only when the whole selection is an
+        // off-body group (groupDrag): on-body positions are text-
         // authoritative and the lift/magnet choreography is single-node
-        // by construction. Dragging an UNselected card collapses the
-        // selection to it first (RF's selectNodesOnDrag), so single drags
-        // are never blocked.
+        // by construction, so mixed selections stay select-only.
+        // Dragging an UNselected card collapses the selection to it first
+        // (RF's selectNodesOnDrag), so single drags are never blocked.
         draggable:
           !p.locked &&
           !parked &&
-          !(selectedIds.size > 1 && selectedIds.has(p.id)),
+          !(selectedIds.size > 1 && selectedIds.has(p.id) && !groupDrag),
         deletable: !p.locked,
         width: p.w,
         height: p.h,
@@ -3096,6 +3214,9 @@ function PartsMapApp() {
           // The edit popover only appears for a lone selection — a marquee
           // catching five cards must not open five toolbars.
           solo: selectedIds.size <= 1,
+          // The whole selection drags together (off-body group) — the
+          // card's refusal probe must not fire for these.
+          groupDrag,
         },
       };
     });
@@ -3105,6 +3226,7 @@ function PartsMapApp() {
     view,
     viewAnim,
     dragOverride,
+    multiDrag,
     selectedIds,
     lift,
     dropPop,
@@ -3217,7 +3339,10 @@ function PartsMapApp() {
           nodeDragThreshold={4}
           nodeClickDistance={8}
           paneClickDistance={8}
-          multiSelectionKeyCode={null}
+          // Desktop: Ctrl/Cmd+click adds/removes a card from the selection
+          // (the selectedIds reducer already accumulates RF's select
+          // changes). Phone keeps taps single-select.
+          multiSelectionKeyCode={isPhone ? null : ["Control", "Meta"]}
           // Desktop is pointer-first (Miro web): bare left-drag on empty
           // canvas draws a marquee; hold Space (RF's default
           // panActivationKeyCode) or middle/right-drag to pan. Phones keep
