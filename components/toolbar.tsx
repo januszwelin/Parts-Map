@@ -64,21 +64,26 @@ function ListIcon() {
   );
 }
 
+/** Clipboard with two ruled lines — reads as "paste a list," which is
+ *  what Import does (paste parts, one per line). Kept distinct from the
+ *  Save button's download glyph, which used to live here. */
 function ImportIcon() {
   return (
     <IconSvg>
-      <path d="M8 2v7.5M5 6.5 8 9.5l3-3" />
-      <path d="M2.5 10.5v2A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-2" />
+      <path d="M10.5 3h1A1.5 1.5 0 0 1 13 4.5v8A1.5 1.5 0 0 1 11.5 14h-7A1.5 1.5 0 0 1 3 12.5v-8A1.5 1.5 0 0 1 4.5 3h1" />
+      <rect x="5.5" y="1.75" width="5" height="3" rx="1" />
+      <path d="M5.75 8h4.5M5.75 10.5h4.5" />
     </IconSvg>
   );
 }
 
-function ImageIcon() {
+/** Download glyph (arrow into a tray) for the Save-image button — it
+ *  writes a PNG to disk, so the download language fits. */
+function DownloadIcon() {
   return (
     <IconSvg>
-      <rect x="2" y="3" width="12" height="10" rx="2" />
-      <circle cx="5.6" cy="6.4" r="1" />
-      <path d="M13.8 10.6 10.6 7.4l-5.4 5.4" />
+      <path d="M8 2v7.5M5 6.5 8 9.5l3-3" />
+      <path d="M2.5 10.5v2A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-2" />
     </IconSvg>
   );
 }
@@ -260,7 +265,7 @@ export function Toolbar(props: {
     };
   }, [anyPopoverOpen]);
   const btn =
-    "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-10";
+    "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-11";
   /** Miro-style icon button: quiet glyph, the word lives in the tooltip. */
   const iconBtn =
     "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 disabled:opacity-30";
@@ -336,7 +341,9 @@ export function Toolbar(props: {
             background: "#fff",
             border: "1px solid var(--line)",
           }}
+          aria-label="Name a part"
           placeholder="Name a part…"
+          autoComplete="off"
           enterKeyHint="go"
           value={props.nameValue}
           onChange={(e) => props.onNameChange(e.target.value)}
@@ -346,7 +353,7 @@ export function Toolbar(props: {
           data-tour="add"
           title="Add a part (Enter)"
           className="shrink-0 rounded-lg px-3 py-1.5 text-xs text-white transition-opacity hover:opacity-90"
-          style={{ background: "var(--accent)" }}
+          style={{ background: "var(--accent-strong)" }}
           onClick={submit}
         >
           Add
@@ -368,12 +375,12 @@ export function Toolbar(props: {
           style={{ color: "var(--ink-soft)" }}
           onClick={props.onSaveImage}
         >
-          <ImageIcon />
+          <DownloadIcon />
         </button>
         <div className="relative shrink-0" ref={settingsRef}>
           <button
             aria-label="Settings"
-            aria-haspopup="menu"
+            aria-haspopup="dialog"
             aria-expanded={settingsOpen}
             title="Settings"
             className={iconBtn}
@@ -494,7 +501,7 @@ export function Toolbar(props: {
             <button
               aria-label="Account"
               className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium text-white"
-              style={{ background: "var(--accent)" }}
+              style={{ background: "var(--accent-strong)" }}
               onClick={() => setAccountOpen((v) => !v)}
             >
               {(session.user.name || session.user.email || "?")
@@ -540,12 +547,12 @@ export function Toolbar(props: {
                 <div className="my-1 h-px" style={{ background: "var(--line)" }} />
                 {confirmClear ? (
                   <div className="px-2 py-1">
-                    <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    <p className="pb-1.5 text-xs" style={{ color: "var(--ink-soft)" }}>
                       Clear the whole map? You can undo this.
                     </p>
                     <div className="flex gap-1.5">
                       <button
-                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        className="flex-1 rounded-md px-2 py-1 text-xs"
                         style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                         onClick={() => {
                           closePopovers();
@@ -555,7 +562,7 @@ export function Toolbar(props: {
                         Clear
                       </button>
                       <button
-                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        className="flex-1 rounded-md px-2 py-1 text-xs"
                         style={{ color: "var(--ink-soft)" }}
                         onClick={() => setConfirmClear(false)}
                       >
@@ -575,17 +582,17 @@ export function Toolbar(props: {
                 <div className="my-1 h-px" style={{ background: "var(--line)" }} />
                 {confirmDelete ? (
                   <div className="px-2 py-1">
-                    <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    <p className="pb-1.5 text-xs" style={{ color: "var(--ink-soft)" }}>
                       Delete your account and all cloud maps?
                     </p>
                     {deleteError && (
-                      <p className="pb-1.5 text-[11px]" style={{ color: "var(--danger)" }}>
+                      <p role="alert" className="pb-1.5 text-xs" style={{ color: "var(--danger)" }}>
                         {deleteError}
                       </p>
                     )}
                     <div className="flex gap-1.5">
                       <button
-                        className="flex-1 rounded-md px-2 py-1 text-[11px] disabled:opacity-60"
+                        className="flex-1 rounded-md px-2 py-1 text-xs disabled:opacity-60"
                         style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                         disabled={deleting}
                         onClick={deleteAccount}
@@ -593,7 +600,7 @@ export function Toolbar(props: {
                         {deleting ? "Deleting…" : "Delete"}
                       </button>
                       <button
-                        className="flex-1 rounded-md px-2 py-1 text-[11px]"
+                        className="flex-1 rounded-md px-2 py-1 text-xs"
                         style={{ color: "var(--ink-soft)" }}
                         disabled={deleting}
                         onClick={() => {
