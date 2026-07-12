@@ -150,66 +150,6 @@ function NoteField({ part, sheet }: { part: Part; sheet?: boolean }) {
   );
 }
 
-/** Editable, text-authoritative location field — the desktop dialect
- *  (popover + list): a free-text input with a native datalist. The phone
- *  sheet uses LocationPicker instead (a native datalist reads as a
- *  broken dropdown on a small screen); this stays for desktop where a
- *  keyboard + mouse makes the datalist genuinely useful. */
-export function LocationField({
-  part,
-  compact,
-}: {
-  part: Part;
-  compact?: boolean;
-}) {
-  const api = useAppApi();
-  const display = locationDisplay(part);
-  const [text, setText] = useState(display);
-  const [invalid, setInvalid] = useState(false);
-  // Reset local text when the authoritative location changes (render-time
-  // derived-state reset — no effect needed).
-  const [lastDisplay, setLastDisplay] = useState(display);
-  if (lastDisplay !== display) {
-    setLastDisplay(display);
-    setText(display);
-    setInvalid(false);
-  }
-
-  const commit = () => {
-    if (text.trim() === display) return;
-    const ok = api.setLocationText(part.id, text);
-    setInvalid(!ok);
-  };
-  useCommitOnDismiss(`location:${part.id}`, commit);
-
-  return (
-    <input
-      className={`nodrag nopan rounded-md px-2 outline-none transition-shadow ${
-        compact ? "w-full py-0.5 text-[11px]" : "w-44 py-1 text-xs"
-      }`}
-      style={{
-        background: "#fff",
-        border: invalid ? "1px solid #C08A8A" : "1px solid var(--line)",
-        color: "var(--ink-soft)",
-      }}
-      list="region-labels"
-      value={text}
-      placeholder="location…"
-      enterKeyHint="done"
-      onChange={(e) => setText(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          commit();
-          (e.target as HTMLInputElement).blur();
-        }
-        e.stopPropagation();
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-    />
-  );
-}
-
 /** Pointer-free arrow creation: a native <select> of the other parts.
  *  Choosing one draws an arrow from this part to it — the keyboard/touch
  *  counterpart to dragging a connect dot (dragging is the only other way
@@ -365,7 +305,7 @@ export function EditPopover({ part }: { part: Part }) {
   // Drag-grip offset — lets the user nudge the bar off the card it's
   // covering. Reset when a different part is selected (render-time
   // derived-state reset, NOT an effect — the repo's
-  // react-hooks/set-state-in-effect rule; same idiom as LocationField).
+  // react-hooks/set-state-in-effect rule; same idiom as NameField).
   const [offset, setOffset] = useState({ dx: 0, dy: 0 });
   const [lastId, setLastId] = useState(part.id);
   if (lastId !== part.id) {
@@ -716,7 +656,7 @@ export function MobileEditSheet({
 }) {
   const api = useAppApi();
   // Keep the last part while sliding out (render-time derived-state
-  // reset — the codebase idiom, see LocationField).
+  // reset — the codebase idiom, see NameField).
   const [lastPart, setLastPart] = useState<Part | null>(null);
   if (part && part !== lastPart) setLastPart(part);
   const p = part ?? lastPart;

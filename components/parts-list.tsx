@@ -19,7 +19,6 @@ import {
   downloadMapPng,
 } from "@/lib/exports";
 import { useReducedMotion } from "@/hooks/use-media";
-import { LocationField } from "@/components/part-editor";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { Icon, PATHS } from "@/components/phone-sheets";
 
@@ -256,10 +255,10 @@ function ExportMenu({
   );
 }
 
-/** One list row, two dialects: desktop keeps the inline location editor
- *  and gains a hover "show on map" affordance; phone is a single
- *  thumb-sized target with a read-only location line (editing lives in
- *  the edit sheet). */
+/** One list row, two dialects, both quiet two-line targets: name over a
+ *  muted location line. Desktop gains a hover "show on map" affordance;
+ *  location editing lives in the part's editor (popover / edit sheet),
+ *  never inline in a row. */
 function PartRow({
   part: p,
   selected,
@@ -324,49 +323,52 @@ function PartRow({
     );
   }
   return (
-    <div
+    <button
       data-part-row={p.id}
-      className="mb-1 rounded-xl px-2 py-2 transition-colors"
+      title="Show on map"
+      onClick={onTap}
+      className="group mb-0.5 flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-black/5"
       style={{ background: rowBg }}
     >
-      <button
-        className="group flex w-full items-center gap-2 text-left"
-        title="Show on map"
-        onClick={onTap}
-      >
+      <span
+        className="mt-0.75 h-2.5 w-2.5 shrink-0 rounded-full"
+        style={{
+          background: p.color,
+          border: "1px solid rgba(58,55,51,0.2)",
+        }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate text-xs" style={{ color: "var(--ink)" }}>
+            {p.name}
+          </span>
+          {noteDot}
+        </span>
         <span
-          className="h-2.5 w-2.5 shrink-0 rounded-full"
-          style={{
-            background: p.color,
-            border: "1px solid rgba(58,55,51,0.2)",
-          }}
-        />
-        <span className="truncate text-xs" style={{ color: "var(--ink)" }}>
-          {p.name}
+          className="block truncate text-[10.5px] leading-4"
+          style={{ color: "var(--ink-faint)" }}
+        >
+          {locationDisplay(p)}
         </span>
-        {noteDot}
-        <span className="ml-auto flex shrink-0 items-center gap-1">
-          <svg
-            className="opacity-0 transition-opacity group-hover:opacity-100"
-            width="12"
-            height="12"
-            viewBox="0 0 12 12"
-            fill="none"
-            stroke="var(--ink-faint)"
-            strokeWidth="1.2"
-            strokeLinecap="round"
-            aria-hidden
-          >
-            <circle cx="6" cy="6" r="2.6" />
-            <path d="M6 0.8v1.7M6 9.5v1.7M0.8 6h1.7M9.5 6h1.7" />
-          </svg>
-          {backBadge}
-        </span>
-      </button>
-      <div className="mt-1 pl-[18px]">
-        <LocationField part={p} compact />
-      </div>
-    </div>
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-1 pt-0.5">
+        <svg
+          className="opacity-0 transition-opacity group-hover:opacity-100"
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="var(--ink-faint)"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          aria-hidden
+        >
+          <circle cx="6" cy="6" r="2.6" />
+          <path d="M6 0.8v1.7M6 9.5v1.7M0.8 6h1.7M9.5 6h1.7" />
+        </svg>
+        {backBadge}
+      </span>
+    </button>
   );
 }
 
@@ -447,11 +449,12 @@ export function PartsListPanel({
           />
           <button
             aria-label="Close list"
-            className="rounded-md px-2 py-1 text-[11px] hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+            title="Close list"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-xs hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
             style={{ color: "var(--ink-faint)" }}
             onClick={onClose}
           >
-            ◂
+            ✕
           </button>
         </div>
       </div>

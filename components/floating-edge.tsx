@@ -60,7 +60,7 @@ function ArrowLabelInput({
   const api = useAppApi();
   const [text, setText] = useState(label ?? "");
   // Re-seed the draft when the authoritative label changes underneath us
-  // (same render-time derived-state reset as LocationField).
+  // (same render-time derived-state reset as NameField).
   const [lastLabel, setLastLabel] = useState(label ?? "");
   if (lastLabel !== (label ?? "")) {
     setLastLabel(label ?? "");
@@ -135,7 +135,7 @@ export function FloatingEdge({
   const sn = useInternalNode(source);
   const tn = useInternalNode(target);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Render-time derived-state reset (the codebase idiom, see LocationField
+  // Render-time derived-state reset (the codebase idiom, see NameField
   // in part-editor.tsx) rather than an effect: deselecting the arrow
   // shouldn't leave a stale "delete this arrow?" waiting for next time.
   const [wasSelected, setWasSelected] = useState(selected);

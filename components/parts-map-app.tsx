@@ -60,7 +60,7 @@ import {
   PALETTE,
   ARROW_INK,
 } from "@/lib/tuning";
-import { REGIONS, REGION_BY_KEY } from "@/lib/regions";
+import { REGION_BY_KEY } from "@/lib/regions";
 import {
   newId,
   type Depth,
@@ -3600,11 +3600,6 @@ function PartsMapApp() {
             </p>
           </div>
         )}
-        <datalist id="region-labels">
-          {REGIONS.map((r) => (
-            <option key={r.key} value={r.label} />
-          ))}
-        </datalist>
         <WelcomeModal
           open={welcomeOpen}
           onClose={closeWelcome}
