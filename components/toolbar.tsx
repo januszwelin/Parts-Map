@@ -6,7 +6,7 @@
    menu; the primary Save button exports a PNG image.)
    ════════════════════════════════════════════════════════════════════ */
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { MIN_SCALE, MAX_SCALE } from "@/lib/tuning";
 import { cardStyle, panelStyle } from "@/lib/ui";
 import { authClient } from "@/lib/auth-client";
@@ -34,6 +34,116 @@ function UndoIcon({ mirrored }: { mirrored?: boolean }) {
   );
 }
 
+/** Shared frame for the toolbar's quiet 16px line icons (Miro-style:
+ *  icon-only buttons, words live in the tooltip). */
+function IconSvg({ children }: { children: React.ReactNode }) {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ display: "block" }}
+      aria-hidden
+    >
+      {children}
+    </svg>
+  );
+}
+
+function ListIcon() {
+  return (
+    <IconSvg>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+      <path d="M6 2.5v11" />
+    </IconSvg>
+  );
+}
+
+function ImportIcon() {
+  return (
+    <IconSvg>
+      <path d="M8 2v7.5M5 6.5 8 9.5l3-3" />
+      <path d="M2.5 10.5v2A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-2" />
+    </IconSvg>
+  );
+}
+
+function ImageIcon() {
+  return (
+    <IconSvg>
+      <rect x="2" y="3" width="12" height="10" rx="2" />
+      <circle cx="5.6" cy="6.4" r="1" />
+      <path d="M13.8 10.6 10.6 7.4l-5.4 5.4" />
+    </IconSvg>
+  );
+}
+
+/** Sliders glyph — reads as "adjustments," which is what the settings
+ *  menu holds (body size, auto-space, scroll, minimap, draft). */
+function SettingsIcon() {
+  return (
+    <IconSvg>
+      <path d="M2.5 5.5h11M2.5 10.5h11" />
+      <circle cx="6" cy="5.5" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="10" cy="10.5" r="1.7" fill="currentColor" stroke="none" />
+    </IconSvg>
+  );
+}
+
+/** Quiet settings-row switch: whole row is the control, sage track when
+ *  on. Used for every boolean in the settings popover. */
+function SwitchRow({
+  label,
+  hint,
+  checked,
+  onChange,
+  title,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  title?: string;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      title={title}
+      className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-black/5"
+      style={{ color: "var(--ink-soft)" }}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="min-w-0">
+        {label}
+        {hint ? (
+          <span className="block text-[10px] leading-4" style={{ color: "var(--ink-faint)" }}>
+            {hint}
+          </span>
+        ) : null}
+      </span>
+      <span
+        aria-hidden
+        className="relative h-4 w-7 shrink-0 rounded-full transition-colors"
+        style={{ background: checked ? "var(--accent)" : "var(--line)" }}
+      >
+        <span
+          className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white transition-transform motion-reduce:transition-none"
+          style={{
+            transform: checked ? "translateX(12px)" : "translateX(0)",
+            boxShadow: "0 1px 2px rgba(60,50,40,0.2)",
+          }}
+        />
+      </span>
+    </button>
+  );
+}
+
 export function Toolbar(props: {
   onAdd: (name: string) => void;
   /** The name field's text lives in the parent (shared with the phone
@@ -58,6 +168,12 @@ export function Toolbar(props: {
   /** Opt-in local draft (keeps work across an accidental tab-close). */
   draftEnabled: boolean;
   onToggleDraft: (on: boolean) => void;
+  /** Device prefs (settings popover): wheel pans instead of zooming, and
+   *  the minimap. Persisted in localStorage (lib/prefs), not in the map. */
+  scrollPan: boolean;
+  onScrollPan: (on: boolean) => void;
+  minimapOn: boolean;
+  onMinimap: (on: boolean) => void;
   /** Visible Undo/Redo — Ctrl/Cmd+Z has no touchscreen equivalent, so this
    *  is the only way to undo a mis-tap on phone. Labels name the action
    *  that would be undone/redone, when known. */
@@ -69,6 +185,7 @@ export function Toolbar(props: {
   onRedo: () => void;
 }) {
   const [accountOpen, setAccountOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -101,6 +218,7 @@ export function Toolbar(props: {
   };
   const closePopovers = () => {
     setAccountOpen(false);
+    setSettingsOpen(false);
     setConfirmDelete(false);
     setConfirmClear(false);
     setDeleteError(null);
@@ -110,11 +228,14 @@ export function Toolbar(props: {
   // this a containing block), so it never covered the canvas. Escape
   // stays for keyboard/switch users.
   const accountRef = useRef<HTMLDivElement>(null);
-  const anyPopoverOpen = accountOpen;
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const anyPopoverOpen = accountOpen || settingsOpen;
   useEffect(() => {
     if (!anyPopoverOpen) return;
     const onDown = (e: PointerEvent) => {
-      if (!accountRef.current?.contains(e.target as Node)) closePopovers();
+      const t = e.target as Node;
+      if (!accountRef.current?.contains(t) && !settingsRef.current?.contains(t))
+        closePopovers();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -131,33 +252,9 @@ export function Toolbar(props: {
   }, [anyPopoverOpen]);
   const btn =
     "rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-black/5 pointer-coarse:min-h-10";
-
-  const sliderAndAuto = (
-    <>
-      <input
-        type="range"
-        min={MIN_SCALE}
-        max={MAX_SCALE}
-        step={0.01}
-        value={props.bodyScale}
-        onChange={(e) => props.onBodyScale(Number(e.target.value))}
-        className="w-24 min-w-0 flex-1 sm:flex-none"
-        aria-label="Body size"
-      />
-      <label
-        className="flex cursor-pointer items-center gap-1 whitespace-nowrap text-[11px]"
-        style={{ color: "var(--ink-soft)" }}
-      >
-        <input
-          type="checkbox"
-          checked={props.autoScale}
-          onChange={(e) => props.onAutoScale(e.target.checked)}
-          className="accent-[var(--accent)]"
-        />
-        auto-space
-      </label>
-    </>
-  );
+  /** Miro-style icon button: quiet glyph, the word lives in the tooltip. */
+  const iconBtn =
+    "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-black/5 disabled:opacity-30";
 
   return (
     // Classic top bar — desktop / wide layouts only. Phones get the
@@ -172,29 +269,33 @@ export function Toolbar(props: {
       className={`pointer-events-none absolute inset-x-0 top-0 z-20 hidden justify-center p-3 ${isPhone ? "" : "sm:flex"}`}
     >
       <div
-        className="pointer-events-auto relative flex w-auto max-w-full select-none flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-xl px-3 py-2"
+        className="pointer-events-auto relative flex w-auto max-w-full select-none flex-nowrap items-center justify-center gap-x-1.5 rounded-xl px-2.5 py-1.5"
         style={{ ...cardStyle, touchAction: "manipulation" }}
       >
         <button
           data-tour="list"
-          aria-label="Toggle parts list"
-          className={`${btn} shrink-0`}
-          style={{ color: "var(--ink-soft)" }}
+          aria-label="Parts list"
+          title="Parts list"
+          className={iconBtn}
+          style={{
+            color: "var(--ink-soft)",
+            background: props.listOpen ? "rgba(0,0,0,0.05)" : undefined,
+          }}
           onClick={() => {
             closePopovers();
             props.onToggleList();
           }}
         >
-          {props.listOpen ? "◂ list" : "☰ list"}
+          <ListIcon />
         </button>
         <div className="flex shrink-0 items-center gap-0.5">
           <button
             aria-label={
               props.undoLabel ? `Undo — ${props.undoLabel}` : "Undo"
             }
-            title={props.undoLabel ? `Undo — ${props.undoLabel}` : "Undo"}
+            title={`${props.undoLabel ? `Undo — ${props.undoLabel}` : "Undo"} (Ctrl+Z)`}
             disabled={!props.canUndo}
-            className={`${btn} disabled:opacity-30`}
+            className={iconBtn}
             style={{ color: "var(--ink-soft)" }}
             onClick={() => {
               closePopovers();
@@ -207,9 +308,9 @@ export function Toolbar(props: {
             aria-label={
               props.redoLabel ? `Redo — ${props.redoLabel}` : "Redo"
             }
-            title={props.redoLabel ? `Redo — ${props.redoLabel}` : "Redo"}
+            title={`${props.redoLabel ? `Redo — ${props.redoLabel}` : "Redo"} (Ctrl+Y)`}
             disabled={!props.canRedo}
-            className={`${btn} disabled:opacity-30`}
+            className={iconBtn}
             style={{ color: "var(--ink-soft)" }}
             onClick={() => {
               closePopovers();
@@ -219,8 +320,9 @@ export function Toolbar(props: {
             <UndoIcon mirrored />
           </button>
         </div>
+        <div className="h-5 w-px shrink-0" style={{ background: "var(--line)" }} />
         <input
-          className="w-24 min-w-0 flex-1 rounded-lg px-3 py-1.5 text-sm outline-none sm:w-44 sm:flex-none"
+          className="w-44 min-w-24 shrink rounded-lg px-3 py-1.5 text-sm outline-none"
           style={{
             background: "#fff",
             border: "1px solid var(--line)",
@@ -233,39 +335,102 @@ export function Toolbar(props: {
         />
         <button
           data-tour="add"
+          title="Add a part (Enter)"
           className="shrink-0 rounded-lg px-3 py-1.5 text-xs text-white transition-opacity hover:opacity-90"
           style={{ background: "var(--accent)" }}
           onClick={submit}
         >
           Add
         </button>
-
-        {/* ——— desktop / wide: everything inline ——— */}
         <button
-          className={`${btn} hidden sm:block`}
+          aria-label="Import parts"
+          title="Import parts — paste a list, one per line"
+          className={iconBtn}
           style={{ color: "var(--ink-soft)" }}
           onClick={props.onImportOpen}
         >
-          Import
+          <ImportIcon />
         </button>
-        <label
-          className="hidden items-center gap-1.5 text-[11px] sm:flex"
-          style={{ color: "var(--ink-soft)" }}
-        >
-          body
-          <div className="flex items-center gap-2">{sliderAndAuto}</div>
-        </label>
-        <div className="hidden h-4 w-px sm:block" style={{ background: "var(--line)" }} />
+        <div className="h-5 w-px shrink-0" style={{ background: "var(--line)" }} />
         <button
-          className={`${btn} hidden sm:block`}
+          aria-label="Save image"
+          title="Save the map as an image (PNG). JSON save/load live in the list ⋯ menu."
+          className={iconBtn}
           style={{ color: "var(--ink-soft)" }}
           onClick={props.onSaveImage}
-          title="Save the map as an image (PNG). JSON save/load live in the list ⋯ menu."
         >
-          Save image
+          <ImageIcon />
         </button>
+        <div className="relative shrink-0" ref={settingsRef}>
+          <button
+            aria-label="Settings"
+            aria-haspopup="menu"
+            aria-expanded={settingsOpen}
+            title="Settings"
+            className={iconBtn}
+            style={{
+              color: "var(--ink-soft)",
+              background: settingsOpen ? "rgba(0,0,0,0.05)" : undefined,
+            }}
+            onClick={() => {
+              const next = !settingsOpen;
+              closePopovers();
+              setSettingsOpen(next);
+            }}
+          >
+            <SettingsIcon />
+          </button>
+          {settingsOpen && (
+            <div
+              className="fade-in absolute right-0 top-full z-20 mt-1 w-64 rounded-xl p-1.5"
+              style={cardStyle}
+            >
+              <div className="px-3 pb-2 pt-2">
+                <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                  Body size
+                </span>
+                <input
+                  type="range"
+                  min={MIN_SCALE}
+                  max={MAX_SCALE}
+                  step={0.01}
+                  value={props.bodyScale}
+                  onChange={(e) => props.onBodyScale(Number(e.target.value))}
+                  className="mt-1.5 w-full"
+                  aria-label="Body size"
+                />
+              </div>
+              <SwitchRow
+                label="Auto-space"
+                hint="Gently make room when parts crowd"
+                checked={props.autoScale}
+                onChange={props.onAutoScale}
+              />
+              <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+              <SwitchRow
+                label="Scroll pans the canvas"
+                hint="Ctrl+scroll zooms"
+                checked={props.scrollPan}
+                onChange={props.onScrollPan}
+              />
+              <SwitchRow
+                label="Show minimap"
+                checked={props.minimapOn}
+                onChange={props.onMinimap}
+              />
+              <div className="my-1 h-px" style={{ background: "var(--line)" }} />
+              <SwitchRow
+                label="Local draft"
+                hint="Keep a private copy on this device"
+                title="Keep a private copy on this device so a tab-close can't lose work"
+                checked={props.draftEnabled}
+                onChange={props.onToggleDraft}
+              />
+            </div>
+          )}
+        </div>
         <button
-          className={`${btn} hidden shrink-0 sm:block`}
+          className={`${btn} shrink-0`}
           style={{ color: "var(--ink-soft)" }}
           aria-label="Welcome & tour"
           title="Welcome & tour"
@@ -321,19 +486,6 @@ export function Toolbar(props: {
                 >
                   Sign out
                 </button>
-                <label
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-xs hover:bg-black/5"
-                  style={{ color: "var(--ink-soft)" }}
-                  title="Keep a private copy on this device so a tab-close can't lose work"
-                >
-                  <input
-                    type="checkbox"
-                    checked={props.draftEnabled}
-                    onChange={(e) => props.onToggleDraft(e.target.checked)}
-                    className="accent-[var(--accent)]"
-                  />
-                  Local draft
-                </label>
                 <div className="my-1 h-px" style={{ background: "var(--line)" }} />
                 {confirmClear ? (
                   <div className="px-2 py-1">

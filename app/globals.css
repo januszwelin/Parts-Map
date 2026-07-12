@@ -279,6 +279,14 @@ input[type="range"]::-moz-range-thumb {
   background: transparent;
   color: var(--ink-faint);
 }
+/* Settings-gated minimap (desktop): reads as one of the solid chrome
+   cards, not a raw widget. */
+.react-flow__minimap {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
 
 /* Connection source dots: 28px touch hit area, 11px visual dot via
    ::after. The compound selector out-specifies React Flow's own handle

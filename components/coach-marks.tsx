@@ -121,7 +121,7 @@ export const TOUR_STEPS: TourStep[] = [
     text: (s) =>
       s.listOpen
         ? "Tap ⋯ for share & export options."
-        : "Your parts also live in the list — open it with ☰.",
+        : "Your parts also live in the list — open it with the list button.",
     done: (s) => s.exportMenuOpen,
   },
   {

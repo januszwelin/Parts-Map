@@ -22,6 +22,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   ViewportPortal,
+  MiniMap,
   MarkerType,
   ConnectionMode,
   SelectionMode,
@@ -99,6 +100,7 @@ import {
   readDraftJson,
   clearDraft,
 } from "@/lib/draft";
+import { getScrollPan, setScrollPan, getMinimap, setMinimap } from "@/lib/prefs";
 import { haptic, hapticTick } from "@/lib/haptics";
 import { getWelcomeSeen, setWelcomeSeen } from "@/lib/onboarding";
 import { sampleMap } from "@/lib/sample-map";
@@ -2740,6 +2742,24 @@ function PartsMapApp() {
     setDraftEnabledState(getDraftEnabled());
   }, []);
 
+  // Device prefs (settings popover): scroll behavior + minimap. Same
+  // read-once hydration-safe pattern as the draft flag above.
+  const [scrollPan, setScrollPanState] = useState(false);
+  const [minimapOn, setMinimapState] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScrollPanState(getScrollPan());
+    setMinimapState(getMinimap());
+  }, []);
+  const onScrollPan = useCallback((on: boolean) => {
+    setScrollPan(on);
+    setScrollPanState(on);
+  }, []);
+  const onMinimap = useCallback((on: boolean) => {
+    setMinimap(on);
+    setMinimapState(on);
+  }, []);
+
   const toggleDraft = useCallback(
     (on: boolean) => {
       setDraftEnabled(on);
@@ -3211,6 +3231,10 @@ function PartsMapApp() {
           // scroll wheel would zoom the stage out from under a spotlight.
           deleteKeyCode={tourLocked ? null : ["Backspace", "Delete"]}
           zoomOnScroll={!tourLocked}
+          // Settings pref (desktop): wheel pans, Ctrl/Cmd+wheel zooms
+          // (RF's zoomActivationKeyCode default), trackpad pinch still
+          // zooms. When off, the wheel zooms as before.
+          panOnScroll={!isPhone && scrollPan && !tourLocked}
           // The floating frame-map button owns the bottom-right corner.
           attributionPosition="bottom-left"
           // Off-screen cards/arrows skip rendering entirely — relevant once
@@ -3258,6 +3282,21 @@ function PartsMapApp() {
               ringRef={ringRef}
             />
           </ViewportPortal>
+          {/* Settings-gated minimap (desktop): stacks above the zoom pill;
+              cards paint in their own colors, warm-paper mask. */}
+          {!isPhone && minimapOn && (
+            <MiniMap
+              position="bottom-right"
+              pannable
+              zoomable
+              aria-label="Map overview"
+              className="mb-14!"
+              bgColor="#ffffff"
+              maskColor="rgba(247,245,241,0.85)"
+              nodeColor={(n) => (n.data as { part: Part }).part.color}
+              nodeStrokeColor="rgba(58,55,51,0.15)"
+            />
+          )}
         </ReactFlow>
 
         {/* Front/Back toggle: flips which surface the single body shows —
@@ -3306,6 +3345,10 @@ function PartsMapApp() {
             setAutoScale(v);
             markDirty();
           }}
+          scrollPan={scrollPan}
+          onScrollPan={onScrollPan}
+          minimapOn={minimapOn}
+          onMinimap={onMinimap}
           onSaveImage={onSaveImage}
           onClearMap={resetMap}
           listOpen={listOpen}
