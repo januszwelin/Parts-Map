@@ -18,7 +18,7 @@ import {
   CloudError,
   type MapSummary,
 } from "@/lib/cloud";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle } from "@/lib/ui";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { useIsPhone } from "@/hooks/use-media";
 import { Icon, PATHS } from "@/components/phone-sheets";
@@ -355,7 +355,7 @@ export function MyMapsModal({
         aria-modal="true"
         aria-labelledby="my-maps-title"
         className="fade-in flex w-full max-w-md flex-col rounded-2xl p-4"
-        style={{ ...panelStyle, background: "#FDFCFA", maxHeight: "80dvh" }}
+        style={{ ...cardStyle, background: "#FDFCFA", maxHeight: "80dvh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between pb-2">
@@ -376,7 +376,7 @@ export function MyMapsModal({
           <input
             className="flex-1 rounded-lg px-3 py-2 text-sm outline-none"
             style={{
-              background: "rgba(255,255,255,0.7)",
+              background: "#fff",
               border: "1px solid var(--line)",
               color: "var(--ink)",
             }}

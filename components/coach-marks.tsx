@@ -22,7 +22,7 @@
    state it reads. */
 
 import { useEffect, useState, type CSSProperties } from "react";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle, panelStyle } from "@/lib/ui";
 
 export type TourSnapshot = {
   partsCount: number;
@@ -421,7 +421,7 @@ export function CoachMarks({
       className={`flex max-w-[min(20rem,86vw)] flex-col rounded-2xl px-3.5 py-2.5 ${
         nudge !== null ? "coach-nudge" : ""
       }`}
-      style={panelStyle}
+      style={snapshot.isPhone ? panelStyle : cardStyle}
     >
       <span className="text-[13px] leading-snug" style={{ color: "var(--ink)" }}>
         {def.text(snapshot)}

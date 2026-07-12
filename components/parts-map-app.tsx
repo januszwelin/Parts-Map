@@ -3488,8 +3488,18 @@ function PartsMapApp() {
             data-ui-chrome
             data-tour-allow
             role="status"
-            className={`fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] left-1/2 z-30 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-2xl py-1.5 pl-4 pr-1.5 ${isPhone ? "" : "sm:bottom-6"}`}
-            style={{ ...panelStyle, touchAction: "manipulation" }}
+            // Desktop clamps its width (readable floor, never wide enough to
+            // reach the zoom pill / minimap) and, while the list panel is
+            // docked open, re-centers over the visible canvas instead of the
+            // whole window so it can't sit on the panel.
+            className={`fade-in absolute bottom-[calc(76px+env(safe-area-inset-bottom))] z-30 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-2xl py-1.5 pl-4 pr-1.5 ${
+              isPhone
+                ? "left-1/2"
+                : `sm:bottom-6 sm:max-w-[clamp(12rem,calc(100vw-520px),28rem)] ${
+                    listOpen ? "left-[calc(50%+138px)]" : "left-1/2"
+                  }`
+            }`}
+            style={{ ...(isPhone ? panelStyle : cardStyle), touchAction: "manipulation" }}
             onClick={() => setNotice(null)}
           >
             <span

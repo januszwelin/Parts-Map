@@ -87,7 +87,7 @@ function NameField({ part, sheet }: { part: Part; sheet?: boolean }) {
         sheet ? "py-2 text-sm" : "py-1 text-xs"
       }`}
       style={{
-        background: "rgba(255,255,255,0.7)",
+        background: sheet ? "rgba(255,255,255,0.7)" : "#fff",
         border: "1px solid var(--line)",
         color: "var(--ink)",
       }}
@@ -133,7 +133,7 @@ function NoteField({ part, sheet }: { part: Part; sheet?: boolean }) {
         sheet ? "py-2 text-sm" : "py-1 text-xs"
       }`}
       style={{
-        background: "rgba(255,255,255,0.7)",
+        background: sheet ? "rgba(255,255,255,0.7)" : "#fff",
         border: "1px solid var(--line)",
         color: "var(--ink)",
       }}
@@ -188,7 +188,7 @@ export function LocationField({
         compact ? "w-full py-0.5 text-[11px]" : "w-44 py-1 text-xs"
       }`}
       style={{
-        background: "rgba(255,255,255,0.7)",
+        background: "#fff",
         border: invalid ? "1px solid #C08A8A" : "1px solid var(--line)",
         color: "var(--ink-soft)",
       }}
@@ -249,7 +249,7 @@ function ConnectField({
         sheet ? "min-h-10 appearance-none px-3 pr-8 text-sm" : "px-2 py-1 text-xs"
       }`}
       style={{
-        background: "rgba(255,255,255,0.7)",
+        background: sheet ? "rgba(255,255,255,0.7)" : "#fff",
         border: "1px solid var(--line)",
         color: "var(--ink-soft)",
       }}

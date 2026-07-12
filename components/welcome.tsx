@@ -11,7 +11,7 @@
    other modal) are the only ways out. */
 
 import { useRef } from "react";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle } from "@/lib/ui";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 export function WelcomeModal({
@@ -42,7 +42,7 @@ export function WelcomeModal({
         aria-modal="true"
         aria-labelledby="welcome-modal-title"
         className="w-full max-w-sm rounded-2xl p-5 text-center"
-        style={{ ...panelStyle, background: "#FDFCFA" }}
+        style={{ ...cardStyle, background: "#FDFCFA" }}
       >
         {/* A tiny living picture of the whole idea: a part finds its
             place on the body. The dot glides in, settles on the chest

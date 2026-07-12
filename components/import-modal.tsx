@@ -8,7 +8,7 @@
    ════════════════════════════════════════════════════════════════════ */
 
 import { useRef, useState } from "react";
-import { panelStyle } from "@/lib/ui";
+import { cardStyle } from "@/lib/ui";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { useIsPhone } from "@/hooks/use-media";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -110,7 +110,7 @@ export function ImportModal({
         aria-modal="true"
         aria-labelledby="import-modal-title"
         className="fade-in flex w-full max-w-md flex-col rounded-2xl p-4"
-        style={{ ...panelStyle, background: "#FDFCFA", maxHeight: "90dvh" }}
+        style={{ ...cardStyle, background: "#FDFCFA", maxHeight: "90dvh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="import-modal-title" className="shrink-0 text-sm font-medium">
@@ -124,7 +124,7 @@ export function ImportModal({
         </p>
         <textarea
           className="mt-3 min-h-0 flex-1 resize-none rounded-xl p-3 text-sm outline-none"
-          style={{ background: "rgba(255,255,255,0.8)", border: "1px solid var(--line)" }}
+          style={{ background: "#fff", border: "1px solid var(--line)" }}
           rows={6}
           autoFocus
           placeholder={PLACEHOLDER}

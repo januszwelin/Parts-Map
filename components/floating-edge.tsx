@@ -83,7 +83,7 @@ function ArrowLabelInput({
           : "nodrag nopan w-36 rounded-md px-2 py-1 text-xs outline-none"
       }
       style={{
-        background: "rgba(255,255,255,0.7)",
+        background: sheet ? "rgba(255,255,255,0.7)" : "#fff",
         border: "1px solid var(--line)",
         color: "var(--ink-soft)",
       }}
@@ -324,7 +324,7 @@ export function FloatingEdge({
               <button
                 className="block max-w-40 truncate rounded-full px-2.5 py-1 text-[11px]"
                 style={{
-                  ...panelStyle,
+                  ...(isPhone ? panelStyle : cardStyle),
                   color: "var(--ink-soft)",
                   cursor: "pointer",
                 }}
