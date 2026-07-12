@@ -128,6 +128,7 @@ import {
 } from "@/components/lift-overlay";
 import { Toolbar, FrameMapButton } from "@/components/toolbar";
 import { ZoomPill } from "@/components/zoom-pill";
+import { ShortcutsModal } from "@/components/shortcuts-modal";
 import { PartsListPanel, PhonePartsSheet } from "@/components/parts-list";
 import { PhoneTopBar } from "@/components/phone-top-bar";
 import { PhoneQuickTools } from "@/components/phone-quick-tools";
@@ -262,6 +263,8 @@ function PartsMapApp() {
   const [liftTarget, setLiftTarget] = useState<LiftTarget | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Keyboard-shortcuts card (desktop) — toolbar Help menu or the "?" key.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   /** The current map's name, shown in the phone top bar. Set when a cloud
    *  map is opened / saved and when a file is loaded; "Untitled map" until
    *  then. Display-only — rename still lives in My Maps. */
@@ -2983,7 +2986,8 @@ function PartsMapApp() {
         // Whichever overlay is on top closes first — modals, then phone
         // sheets (create/share/more, then the list), then selection. The
         // desktop docked list stays: it's persistent chrome, not an overlay.
-        if (importOpen) setImportOpen(false);
+        if (shortcutsOpen) setShortcutsOpen(false);
+        else if (importOpen) setImportOpen(false);
         else if (myMapsOpen) setMyMapsOpen(false);
         else if (welcomeOpen) setWelcomeOpen(false);
         else if (phoneSheet) setPhoneSheet(null);
@@ -2992,6 +2996,12 @@ function PartsMapApp() {
           setSelectedEdgeId(null);
           setSelectedId(null);
         }
+        return;
+      }
+      // "?" opens the shortcuts card (desktop; needs a keyboard anyway).
+      if (e.key === "?" && !isPhoneRef.current && !liftInfoRef.current) {
+        e.preventDefault();
+        setShortcutsOpen((v) => !v);
         return;
       }
       if (e.key === "Enter" && selectedId) {
@@ -3008,7 +3018,7 @@ function PartsMapApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId, setSelectedId, setSelectedEdgeId]);
+  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId, shortcutsOpen, setSelectedId, setSelectedEdgeId]);
 
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
@@ -3479,6 +3489,7 @@ function PartsMapApp() {
           listOpen={listOpen}
           onToggleList={() => setListOpen((v) => !v)}
           onShowWelcome={reopenWelcome}
+          onShowShortcuts={() => setShortcutsOpen(true)}
           onOpenMyMaps={() => setMyMapsOpen(true)}
           onSaveToCloud={saveToCloud}
           draftEnabled={draftEnabled}
@@ -3725,6 +3736,11 @@ function PartsMapApp() {
             </p>
           </div>
         )}
+        <ShortcutsModal
+          open={shortcutsOpen}
+          onClose={() => setShortcutsOpen(false)}
+          scrollPan={scrollPan}
+        />
         <WelcomeModal
           open={welcomeOpen}
           onClose={closeWelcome}

@@ -163,6 +163,8 @@ export function Toolbar(props: {
   listOpen: boolean;
   onToggleList: () => void;
   onShowWelcome: () => void;
+  /** Opens the keyboard-shortcuts card (also on the "?" key). */
+  onShowShortcuts: () => void;
   onOpenMyMaps: () => void;
   onSaveToCloud: () => void;
   /** Opt-in local draft (keeps work across an accidental tab-close). */
@@ -186,6 +188,7 @@ export function Toolbar(props: {
 }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -219,6 +222,7 @@ export function Toolbar(props: {
   const closePopovers = () => {
     setAccountOpen(false);
     setSettingsOpen(false);
+    setHelpOpen(false);
     setConfirmDelete(false);
     setConfirmClear(false);
     setDeleteError(null);
@@ -229,12 +233,17 @@ export function Toolbar(props: {
   // stays for keyboard/switch users.
   const accountRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
-  const anyPopoverOpen = accountOpen || settingsOpen;
+  const helpRef = useRef<HTMLDivElement>(null);
+  const anyPopoverOpen = accountOpen || settingsOpen || helpOpen;
   useEffect(() => {
     if (!anyPopoverOpen) return;
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (!accountRef.current?.contains(t) && !settingsRef.current?.contains(t))
+      if (
+        !accountRef.current?.contains(t) &&
+        !settingsRef.current?.contains(t) &&
+        !helpRef.current?.contains(t)
+      )
         closePopovers();
     };
     const onKey = (e: KeyboardEvent) => {
@@ -429,15 +438,57 @@ export function Toolbar(props: {
             </div>
           )}
         </div>
-        <button
-          className={`${btn} shrink-0`}
-          style={{ color: "var(--ink-soft)" }}
-          aria-label="Welcome & tour"
-          title="Welcome & tour"
-          onClick={props.onShowWelcome}
-        >
-          ?
-        </button>
+        <div className="relative shrink-0" ref={helpRef}>
+          <button
+            className={iconBtn}
+            style={{
+              color: "var(--ink-soft)",
+              background: helpOpen ? "rgba(0,0,0,0.05)" : undefined,
+            }}
+            aria-label="Help"
+            aria-haspopup="menu"
+            aria-expanded={helpOpen}
+            title="Help"
+            onClick={() => {
+              const next = !helpOpen;
+              closePopovers();
+              setHelpOpen(next);
+            }}
+          >
+            ?
+          </button>
+          {helpOpen && (
+            <div
+              className="fade-in absolute right-0 top-full z-20 mt-1 w-48 rounded-xl p-1.5"
+              style={cardStyle}
+              role="menu"
+            >
+              <button
+                role="menuitem"
+                className="w-full rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                style={{ color: "var(--ink-soft)" }}
+                onClick={() => {
+                  closePopovers();
+                  props.onShowWelcome();
+                }}
+              >
+                Welcome &amp; tour
+              </button>
+              <button
+                role="menuitem"
+                className="flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                style={{ color: "var(--ink-soft)" }}
+                onClick={() => {
+                  closePopovers();
+                  props.onShowShortcuts();
+                }}
+              >
+                Keyboard shortcuts
+                <span style={{ color: "var(--ink-faint)" }}>?</span>
+              </button>
+            </div>
+          )}
+        </div>
         {session ? (
           <div className="relative hidden shrink-0 sm:block" ref={accountRef}>
             <button
