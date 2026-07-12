@@ -26,6 +26,7 @@ import { REGION_BY_KEY, REGION_SECTIONS } from "@/lib/regions";
 import { matchRegion } from "@/lib/matcher";
 import type { Part } from "@/lib/types";
 import { useAppApi } from "@/hooks/use-app-api";
+import { useIsPhone } from "@/hooks/use-media";
 
 export function LocationPicker({
   part,
@@ -35,6 +36,7 @@ export function LocationPicker({
   onDone: () => void;
 }) {
   const api = useAppApi();
+  const isPhone = useIsPhone();
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
 
@@ -89,7 +91,7 @@ export function LocationPicker({
         autoCorrect="off"
         autoCapitalize="none"
         spellCheck={false}
-        autoFocus
+        autoFocus={!isPhone}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
@@ -100,7 +102,7 @@ export function LocationPicker({
       >
         {resolvedRegion && !alreadyListed && (
           <button
-            className="mb-2 flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm"
+            className="mb-2 flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm pointer-coarse:min-h-11"
             style={{
               background: "color-mix(in srgb, var(--accent) 14%, transparent)",
               color: "var(--ink)",
@@ -131,7 +133,7 @@ export function LocationPicker({
               return (
                 <button
                   key={r.key}
-                  className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm"
+                  className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm pointer-coarse:min-h-11"
                   style={{
                     background: active
                       ? "rgba(125,139,116,0.14)"
@@ -143,7 +145,7 @@ export function LocationPicker({
                   <span className="min-w-0 flex-1 truncate">{r.label}</span>
                   {r.isBack && (
                     <span
-                      className="shrink-0 rounded-full px-1.5 text-[9px]"
+                      className="shrink-0 rounded-full px-1.5 text-[10px]"
                       style={{
                         border: "1px solid var(--line)",
                         color: "var(--ink-faint)",

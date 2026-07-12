@@ -107,6 +107,7 @@ export function ShortcutsModal({
           <Row action="Add a part" keys={["Enter"]} />
           <Row action="Rename the selected part" keys={["Enter"]} />
           <Row action="Nudge the selected part" keys={["arrow keys"]} />
+          <Row action="Flip front / back" keys={["F"]} />
           <Row action="Delete selected" keys={["Delete", "Backspace"]} />
           <div className="my-1 h-px" style={{ background: "var(--line)" }} />
           <Row action="Undo" keys={["Ctrl + Z"]} />

@@ -6,7 +6,7 @@
    ════════════════════════════════════════════════════════════════════ */
 
 import React, { useEffect, useRef, useState } from "react";
-import type { Arrow, Part, Depth } from "@/lib/types";
+import type { Arrow, Part, Depth, Shape } from "@/lib/types";
 import { partIsBack, locationDisplay } from "@/lib/part-utils";
 import { cardStyle } from "@/lib/ui";
 import {
@@ -21,6 +21,8 @@ import {
 import { useReducedMotion } from "@/hooks/use-media";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { Icon, PATHS } from "@/components/phone-sheets";
+import { EllipsisIcon, CloseIcon, SearchIcon } from "@/components/icons";
+import { BODY_PATHS } from "@/lib/body-paths";
 
 /** The list filter's state — only offered once the list is long enough to
  *  need it; clears itself whenever the list is put away. */
@@ -145,7 +147,7 @@ function ExportMenu({
   };
 
   const rowCls =
-    "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-black/5 disabled:opacity-40";
+    "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-black/5 disabled:opacity-40";
 
   return (
     <div className="relative" ref={menuRef}>
@@ -155,11 +157,11 @@ function ExportMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="relative flex h-7 w-7 items-center justify-center rounded-md text-sm hover:bg-black/5 active:bg-black/10 pointer-coarse:h-10 pointer-coarse:w-10"
+        className="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-black/5 active:bg-black/10 pointer-coarse:h-10 pointer-coarse:w-10"
         style={{ color: "var(--ink-soft)" }}
         title={showJson && dirty ? "Unsaved changes — Save JSON in this menu" : undefined}
       >
-        ⋯
+        <EllipsisIcon />
         {showJson && dirty && (
           <span
             aria-hidden
@@ -182,7 +184,9 @@ function ExportMenu({
             disabled={!parts.length}
             title="Copy the whole map as text — parts, locations, notes, relationships"
           >
-            {copied === "text" ? "copied ✓" : "copy as text"}
+            <span aria-live="polite">
+              {copied === "text" ? "copied ✓" : "copy as text"}
+            </span>
           </button>
           <button
             role="menuitem"
@@ -192,7 +196,9 @@ function ExportMenu({
             disabled={!arrows.length}
             title="Download all arrows as a flowchart image"
           >
-            {copied === "flow" ? "exported ✓" : "export flowchart"}
+            <span aria-live="polite">
+              {copied === "flow" ? "exported ✓" : "export flowchart"}
+            </span>
           </button>
           <button
             role="menuitem"
@@ -202,7 +208,9 @@ function ExportMenu({
             disabled={!parts.length}
             title="Download the body map, with every part in its real position"
           >
-            {copied === "map" ? "exported ✓" : "export map image"}
+            <span aria-live="polite">
+              {copied === "map" ? "exported ✓" : "export map image"}
+            </span>
           </button>
           {showJson && (
             <>
@@ -259,6 +267,16 @@ function ExportMenu({
  *  muted location line. Desktop gains a hover "show on map" affordance;
  *  location editing lives in the part's editor (popover / edit sheet),
  *  never inline in a row. */
+
+/** Desktop rows carry a miniature of the card's shape — the list echoes
+ *  the canvas (SHAPE_RADIUS's proportions at swatch scale). */
+const SWATCH_STYLE: Record<Shape, React.CSSProperties> = {
+  rounded: { width: 11, height: 11, borderRadius: 3.5 },
+  square: { width: 11, height: 11, borderRadius: 2 },
+  pill: { width: 13, height: 8, borderRadius: 999 },
+  ellipse: { width: 13, height: 9, borderRadius: "50%" },
+};
+
 function PartRow({
   part: p,
   selected,
@@ -272,6 +290,8 @@ function PartRow({
 }) {
   const noteDot = p.note ? (
     <span
+      role="img"
+      aria-label="has a note"
       title={p.note}
       className="h-1 w-1 shrink-0 rounded-full"
       style={{ background: "var(--ink-faint)", opacity: 0.8 }}
@@ -279,7 +299,7 @@ function PartRow({
   ) : null;
   const backBadge = partIsBack(p) ? (
     <span
-      className="shrink-0 rounded-full px-1.5 text-[9px]"
+      className="shrink-0 rounded-full px-1.5 text-[10px]"
       style={{
         border: "1px solid var(--line)",
         color: "var(--ink-faint)",
@@ -327,16 +347,26 @@ function PartRow({
       data-part-row={p.id}
       title="Show on map"
       onClick={onTap}
-      className="group mb-0.5 flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-black/5"
+      className="group relative mb-0.5 flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-black/5"
       style={{ background: rowBg }}
     >
-      <span
-        className="mt-0.75 h-2.5 w-2.5 shrink-0 rounded-full"
-        style={{
-          background: p.color,
-          border: "1px solid rgba(58,55,51,0.2)",
-        }}
-      />
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute left-1 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full"
+          style={{ background: "var(--accent)" }}
+        />
+      )}
+      <span className="mt-0.75 flex h-3 w-3.5 shrink-0 items-center justify-center">
+        <span
+          className="block"
+          style={{
+            ...SWATCH_STYLE[p.shape],
+            background: p.color,
+            border: "1px solid rgba(58,55,51,0.2)",
+          }}
+        />
+      </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
           <span className="truncate text-xs" style={{ color: "var(--ink)" }}>
@@ -345,7 +375,7 @@ function PartRow({
           {noteDot}
         </span>
         <span
-          className="block truncate text-[10.5px] leading-4"
+          className="block truncate text-[11px] leading-4"
           style={{ color: "var(--ink-faint)" }}
         >
           {locationDisplay(p)}
@@ -429,11 +459,20 @@ export function PartsListPanel({
       style={cardStyle}
     >
       <div
-        className="flex items-center justify-between px-3.5 py-2.5"
+        className="flex items-center justify-between py-2 pl-3.5 pr-2"
         style={{ borderBottom: "1px solid var(--line)" }}
       >
-        <span className="text-xs font-medium" style={{ color: "var(--ink-soft)" }}>
-          Parts ({parts.length})
+        <span
+          className="flex items-center gap-1.5 text-sm font-medium"
+          style={{ color: "var(--ink-soft)" }}
+        >
+          Parts
+          <span
+            className="rounded-full bg-black/4 px-1.5 py-0.5 text-[10px] leading-none tabular-nums"
+            style={{ color: "var(--ink-faint)" }}
+          >
+            {parts.length}
+          </span>
         </span>
         <div className="flex items-center gap-0.5">
           <ExportMenu
@@ -450,57 +489,108 @@ export function PartsListPanel({
           <button
             aria-label="Close list"
             title="Close list"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-xs hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+            className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             style={{ color: "var(--ink-faint)" }}
             onClick={onClose}
           >
-            ✕
+            <CloseIcon />
           </button>
         </div>
       </div>
       {parts.length > 8 && (
-        <div className="px-3 py-1.5" style={{ borderBottom: "1px solid var(--line)" }}>
-          <input
-            className="w-full rounded-md px-2 py-1 text-[11px] outline-none"
-            style={{
-              background: "#fff",
-              border: "1px solid var(--line)",
-              color: "var(--ink)",
-            }}
-            value={query}
-            placeholder="find a part…"
-            aria-label="Filter parts"
-            enterKeyHint="search"
-            inputMode="search"
-            autoCorrect="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+        <div className="px-3 pb-1 pt-2">
+          <div className="relative">
+            <span
+              className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2"
+              style={{ color: "var(--ink-faint)" }}
+            >
+              <SearchIcon />
+            </span>
+            <input
+              className="w-full rounded-lg bg-black/3 py-1.5 pl-8 pr-2 text-xs outline-none transition-colors focus:bg-black/5"
+              style={{ color: "var(--ink)" }}
+              value={query}
+              placeholder="Find a part…"
+              aria-label="Filter parts"
+              enterKeyHint="search"
+              inputMode="search"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
         </div>
       )}
       <div ref={rowsRef} className="flex-1 select-text overflow-y-auto px-2 py-2">
         {parts.length === 0 && (
-          <p className="px-2 py-4 text-center text-[11px]" style={{ color: "var(--ink-faint)" }}>
-            No parts yet. Name one above, or Import a list.
-          </p>
+          <div className="flex flex-col items-center gap-2.5 px-2 py-6">
+            <svg
+              viewBox="0 0 460 1000"
+              width="24"
+              height="52"
+              aria-hidden
+              style={{ opacity: 0.45 }}
+            >
+              {BODY_PATHS.map((d, i) => (
+                <path
+                  key={i}
+                  d={d}
+                  fill="none"
+                  stroke="var(--ink-faint)"
+                  strokeWidth={18}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ))}
+            </svg>
+            <p className="text-center text-[11px]" style={{ color: "var(--ink-faint)" }}>
+              No parts yet. Name one above, or Import a list.
+            </p>
+          </div>
         )}
         {parts.length > 0 && shown.length === 0 && (
           <p className="px-2 py-4 text-center text-[11px]" style={{ color: "var(--ink-faint)" }}>
             Nothing matches “{query.trim()}”.
           </p>
         )}
-        {shown.map((p) => (
-          <PartRow
-            key={p.id}
-            part={p}
-            selected={p.id === selectedId}
-            onTap={() => {
-              onSelect(p.id);
-              onReveal(p.id);
-            }}
-          />
-        ))}
+        {(() => {
+          const row = (p: Part) => (
+            <PartRow
+              key={p.id}
+              part={p}
+              selected={p.id === selectedId}
+              onTap={() => {
+                onSelect(p.id);
+                onReveal(p.id);
+              }}
+            />
+          );
+          // Mixed maps read by surface; small single-surface maps (and
+          // search results) stay flat, exactly as before.
+          const grouped = !query.trim()
+            ? (
+                [
+                  ["Front", shown.filter((p) => !p.offBody && !partIsBack(p))],
+                  ["Back", shown.filter((p) => !p.offBody && partIsBack(p))],
+                  ["Off body", shown.filter((p) => p.offBody)],
+                ] as const
+              ).filter(([, rows]) => rows.length > 0)
+            : null;
+          if (grouped && grouped.length > 1)
+            return grouped.map(([name, rows]) => (
+              <div key={name} className="mb-1">
+                <div
+                  className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide"
+                  style={{ color: "var(--ink-faint)" }}
+                >
+                  {name}
+                </div>
+                {rows.map(row)}
+              </div>
+            ));
+          return shown.map(row);
+        })()}
       </div>
     </div>
   );
@@ -614,7 +704,7 @@ function ListOptions({
       <div className="flex items-center gap-2 pb-1.5">
         <button
           aria-label="Back to the list"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base transition-opacity active:opacity-70 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base transition-opacity active:opacity-70 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
           style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
           onClick={onBack}
         >
@@ -628,7 +718,7 @@ function ListOptions({
         </span>
         <button
           aria-label="Close list"
-          className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+          className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-11"
           style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
           onClick={onClose}
         >
@@ -651,7 +741,9 @@ function ListOptions({
           }}
         >
           <Icon d={a.icon} />
-          {flash?.id === a.id ? flash.text : a.base}
+          <span aria-live="polite">
+            {flash?.id === a.id ? flash.text : a.base}
+          </span>
         </button>
       ))}
     </div>
@@ -733,7 +825,7 @@ export function PhonePartsSheet({
                 data-tour="export-menu"
                 aria-label="Copy & export options"
                 aria-expanded={optionsOpen}
-                className="flex h-9 w-9 items-center justify-center rounded-full text-base hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-base hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
                 style={{ color: "var(--ink-soft)" }}
                 onClick={() => showOptions(true)}
               >
@@ -741,7 +833,7 @@ export function PhonePartsSheet({
               </button>
               <button
                 aria-label="Close list"
-                className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+                className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-11"
                 style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
                 onClick={onClose}
               >

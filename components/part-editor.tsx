@@ -186,7 +186,7 @@ function ConnectField({
       aria-label={`Draw an arrow from ${part.name} to another part`}
       data-tour={sheet ? "connect" : undefined}
       className={`nodrag nopan w-full rounded-md outline-none ${
-        sheet ? "min-h-10 appearance-none px-3 pr-8 text-sm" : "px-2 py-1 text-xs"
+        sheet ? "min-h-11 appearance-none px-3 pr-8 text-sm" : "px-2 py-1 text-xs"
       }`}
       style={{
         background: sheet ? "rgba(255,255,255,0.7)" : "#fff",
@@ -381,8 +381,7 @@ export function EditPopover({ part }: { part: Part }) {
     >
       {/* drag grip */}
       <div
-        role="button"
-        aria-label="Move toolbar"
+        aria-hidden
         title="Drag to move"
         className="nodrag nopan flex h-8 w-5 shrink-0 cursor-grab items-center justify-center rounded-md hover:bg-black/5"
         style={{ touchAction: "none", color: "var(--ink-faint)" }}
@@ -454,7 +453,7 @@ export function EditPopover({ part }: { part: Part }) {
           onClick={() => setOpenPop((p) => (p === "size" ? null : "size"))}
         >
           <span style={{ fontSize: 13 }}>A</span>
-          <span aria-hidden style={{ fontSize: 9, color: "var(--ink-faint)" }}>
+          <span aria-hidden style={{ fontSize: 10, color: "var(--ink-faint)" }}>
             ▾
           </span>
         </button>
@@ -731,7 +730,7 @@ export function MobileEditSheet({
               <NameField part={p} sheet />
               <button
                 aria-label="Done editing"
-                className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+                className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-11"
                 style={{
                   background: "rgba(0,0,0,0.05)",
                   color: "var(--ink-soft)",
@@ -744,16 +743,16 @@ export function MobileEditSheet({
                 Done
               </button>
             </div>
-            <div className="flex justify-between gap-1 pb-2.5">
+            <div className="flex justify-between gap-1.5 pb-2.5">
               {PALETTE.map((c) => (
                 <button
                   key={c}
                   aria-label={`Color: ${PALETTE_NAMES[c] ?? c}`}
                   aria-pressed={p.color === c}
                   onClick={() => api.updatePart(p.id, { color: c })}
-                  // min-w-0 shrink: 8 fixed 40px swatches + sheet padding
+                  // min-w-0 shrink: 8 fixed 44px swatches + sheet padding
                   // overflow a 320px screen — ideal size, allowed to give.
-                  className="flex h-10 w-10 min-w-0 shrink items-center justify-center rounded-full active:bg-black/10"
+                  className="flex h-11 w-11 min-w-0 shrink items-center justify-center rounded-full active:bg-black/10"
                 >
                   <span
                     className="h-7 w-7 rounded-full"
@@ -768,14 +767,14 @@ export function MobileEditSheet({
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-1.5 pb-1.5">
+            <div className="flex items-center gap-1.5 pb-2.5">
               {(["s", "m", "l"] as const).map((s) => (
                 <button
                   key={s}
                   aria-label={`Text size: ${FONT_SIZE_LABELS[s]}`}
                   aria-pressed={p.fontSize === s}
                   onClick={() => api.updatePart(p.id, { fontSize: s })}
-                  className={`min-h-10 flex-1 rounded-lg ${pressScale}`}
+                  className={`min-h-11 flex-1 rounded-lg ${pressScale}`}
                   style={{
                     ...chip(p.fontSize === s),
                     fontSize: s === "s" ? 11 : s === "m" ? 14 : 17,
@@ -788,7 +787,7 @@ export function MobileEditSheet({
                 aria-label="Bold"
                 aria-pressed={p.bold}
                 onClick={() => api.updatePart(p.id, { bold: !p.bold })}
-                className={`min-h-10 flex-1 rounded-lg text-sm font-bold ${pressScale}`}
+                className={`min-h-11 flex-1 rounded-lg text-sm font-bold ${pressScale}`}
                 style={chip(p.bold)}
               >
                 B
@@ -797,7 +796,7 @@ export function MobileEditSheet({
                 aria-label="Underline"
                 aria-pressed={!!p.underline}
                 onClick={() => api.updatePart(p.id, { underline: !p.underline })}
-                className={`min-h-10 flex-1 rounded-lg text-sm ${pressScale}`}
+                className={`min-h-11 flex-1 rounded-lg text-sm ${pressScale}`}
                 style={{ ...chip(!!p.underline), textDecoration: "underline" }}
               >
                 U
@@ -819,7 +818,7 @@ export function MobileEditSheet({
                   aria-pressed={p.shape === shape}
                   aria-label={`Shape: ${shape}`}
                   onClick={() => api.updatePart(p.id, { shape })}
-                  className={`min-h-10 flex-1 rounded-lg text-sm ${pressScale}`}
+                  className={`min-h-11 flex-1 rounded-lg text-sm ${pressScale}`}
                   style={chip(p.shape === shape)}
                 >
                   {glyph}
@@ -833,7 +832,7 @@ export function MobileEditSheet({
                   api.duplicatePart(p.id);
                   onClose();
                 }}
-                className={`flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg text-xs ${pressScale}`}
+                className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg text-xs ${pressScale}`}
                 style={chip(false)}
               >
                 <DuplicateIcon /> Duplicate
@@ -842,7 +841,7 @@ export function MobileEditSheet({
                 aria-label={p.locked ? "Unlock part" : "Lock part"}
                 aria-pressed={!!p.locked}
                 onClick={() => api.updatePart(p.id, { locked: !p.locked })}
-                className={`flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg text-xs ${pressScale}`}
+                className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg text-xs ${pressScale}`}
                 style={chip(!!p.locked)}
               >
                 <LockIcon locked={!!p.locked} /> {p.locked ? "Locked" : "Lock"}
@@ -850,7 +849,7 @@ export function MobileEditSheet({
             </div>
             {confirmingDelete ? (
               <div className="flex items-center gap-2">
-                <span className="flex-1 text-[13px]" style={{ color: "var(--ink-soft)" }}>
+                <span className="flex-1 text-xs" style={{ color: "var(--ink-soft)" }}>
                   Delete “{p.name}”?
                 </span>
                 <button
@@ -859,7 +858,7 @@ export function MobileEditSheet({
                     api.deletePart(p.id);
                     onClose();
                   }}
-                  className="min-h-10 shrink-0 rounded-lg px-3.5 text-xs transition-opacity active:opacity-75"
+                  className="min-h-11 shrink-0 rounded-lg px-3.5 text-xs transition-opacity active:opacity-75"
                   style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                 >
                   delete
@@ -867,7 +866,7 @@ export function MobileEditSheet({
                 <button
                   aria-label="Cancel delete"
                   onClick={() => setConfirmDeleteFor(null)}
-                  className="min-h-10 shrink-0 rounded-lg px-3.5 text-xs active:bg-black/10"
+                  className="min-h-11 shrink-0 rounded-lg px-3.5 text-xs active:bg-black/10"
                   style={{ color: "var(--ink-soft)" }}
                 >
                   cancel
@@ -878,7 +877,7 @@ export function MobileEditSheet({
                 <button
                   aria-label="Edit location"
                   onClick={() => setPickerOpen(true)}
-                  className="flex min-h-10 flex-1 items-center justify-between rounded-lg px-3 text-left text-sm transition-opacity active:opacity-70"
+                  className="flex min-h-11 flex-1 items-center justify-between rounded-lg px-3 text-left text-sm transition-opacity active:opacity-70"
                   style={{
                     background: "rgba(255,255,255,0.7)",
                     border: "1px solid var(--line)",
@@ -901,7 +900,7 @@ export function MobileEditSheet({
                       <button
                         key={d}
                         aria-pressed={surface === d}
-                        className="min-h-10 px-3 text-[11px] uppercase tracking-wide transition-opacity active:opacity-80"
+                        className="min-h-11 px-3 text-[11px] uppercase tracking-wide transition-opacity active:opacity-80"
                         style={{
                           background:
                             surface === d ? "var(--ink)" : "rgba(255,255,255,0.7)",
@@ -921,7 +920,7 @@ export function MobileEditSheet({
                   // strand the arrow step with one part.
                   data-tour-deny
                   onClick={() => setConfirmDeleteFor(p.id)}
-                  className="ml-auto min-h-10 shrink-0 rounded-lg px-3.5 text-xs transition-opacity active:opacity-75"
+                  className="ml-auto min-h-11 shrink-0 rounded-lg px-3.5 text-xs transition-opacity active:opacity-75"
                   style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                 >
                   delete

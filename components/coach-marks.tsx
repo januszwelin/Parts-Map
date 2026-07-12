@@ -423,7 +423,7 @@ export function CoachMarks({
       }`}
       style={snapshot.isPhone ? panelStyle : cardStyle}
     >
-      <span className="text-[13px] leading-snug" style={{ color: "var(--ink)" }}>
+      <span className="text-sm leading-snug" style={{ color: "var(--ink)" }}>
         {def.text(snapshot)}
       </span>
       <div className="flex items-center justify-between gap-3 pt-1.5">

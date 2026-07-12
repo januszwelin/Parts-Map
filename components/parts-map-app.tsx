@@ -117,6 +117,7 @@ import {
   BodyOutline,
   AnchorConstellation,
 } from "@/components/body-outline";
+import { FigureCaption } from "@/components/figure-caption";
 import { MobileEditSheet } from "@/components/part-editor";
 import { PartNode } from "@/components/part-node";
 import { FloatingEdge, ConnectionLine, ArrowEditSheet } from "@/components/floating-edge";
@@ -870,6 +871,16 @@ function PartsMapApp() {
     };
     viewAnimRafRef.current = requestAnimationFrame(step);
   }, []);
+
+  /** The figure caption's flip — buzz only on a user-initiated change
+   *  (flipView's system callers, like revealPart, stay silent). */
+  const onFlipRequest = useCallback(
+    (d: Depth) => {
+      if (viewRef.current !== d) haptic(6);
+      flipView(d);
+    },
+    [flipView],
+  );
 
   /** The list's "where is it?" gesture: glide the camera to a part and
    *  give its card a soft two-breath halo. */
@@ -3004,6 +3015,22 @@ function PartsMapApp() {
         setShortcutsOpen((v) => !v);
         return;
       }
+      // "f" flips the shown surface — the figure caption scrolls with the
+      // scene, so the keyboard covers the moments its seat is off-screen.
+      // Locked tour excluded: a mid-step flip would slide the spotlighted
+      // card into a park lane (same reasoning as the undo/redo swallow).
+      if (
+        key === "f" &&
+        !mod &&
+        !e.altKey &&
+        !isPhoneRef.current &&
+        !liftInfoRef.current &&
+        !tourLockedRef.current
+      ) {
+        e.preventDefault();
+        flipView(viewRef.current === "front" ? "back" : "front");
+        return;
+      }
       if (e.key === "Enter" && selectedId) {
         // The open editor (popover or sheet) carries the name field.
         const el = document.querySelector<HTMLInputElement>(
@@ -3018,7 +3045,7 @@ function PartsMapApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId, shortcutsOpen, setSelectedId, setSelectedEdgeId]);
+  }, [undo, redo, importOpen, myMapsOpen, welcomeOpen, phoneSheet, listOpen, selectedId, shortcutsOpen, setSelectedId, setSelectedEdgeId, flipView]);
 
 
   /* ——— auto-space / anti-crowding (armed only by placement events).
@@ -3416,6 +3443,14 @@ function PartsMapApp() {
               indicatorRef={indicatorRef}
               ringRef={ringRef}
             />
+            {/* The Front/Back control, printed under the figure's feet —
+                outside the pointer-events:none wrapper because it's the
+                one piece of the scene you can press. */}
+            <FigureCaption
+              bodyScale={bodyScale}
+              view={view}
+              onFlip={onFlipRequest}
+            />
           </ViewportPortal>
           {/* Settings-gated minimap (desktop): stacks above the zoom pill;
               cards paint in their own colors, warm-paper mask. */}
@@ -3434,40 +3469,6 @@ function PartsMapApp() {
           )}
         </ReactFlow>
 
-        {/* Front/Back toggle: flips which surface the single body shows —
-            the hidden surface's cards glide out to the side lanes. Both
-            layouts; sits below the top bar / toolbar. */}
-        <div
-          data-ui-chrome
-          className="absolute left-1/2 top-[calc(4rem+env(safe-area-inset-top))] z-20 flex -translate-x-1/2 gap-0.5 rounded-full p-1"
-          // Shared surface: phone keeps the frosted pill; desktop matches
-          // the solid Miro-clean chrome.
-          style={{ ...(isPhone ? panelStyle : cardStyle), touchAction: "manipulation" }}
-        >
-          {(["front", "back"] as const).map((d) => (
-            <button
-              key={d}
-              aria-label={`Show the ${d} of the body`}
-              aria-pressed={view === d}
-              className="rounded-full px-3.5 py-1 text-[11px] uppercase tracking-[0.12em] transition-colors active:bg-black/10 pointer-coarse:min-h-11"
-              style={
-                view === d
-                  ? { background: "var(--accent)", color: "#fff" }
-                  : { color: "var(--ink-soft)" }
-              }
-              onClick={() => {
-                // The flip moves every card; give it the same buzz a drop
-                // gets. Only on a real change — and only here, not inside
-                // flipView, whose system-initiated calls (reveal) stay
-                // silent.
-                if (view !== d) haptic(6);
-                flipView(d);
-              }}
-            >
-              {d}
-            </button>
-          ))}
-        </div>
         <Toolbar
           onAdd={spawnPart}
           nameValue={draft}

@@ -60,7 +60,7 @@ export function ImportModal({
             </span>
             <button
               aria-label="Cancel import"
-              className="shrink-0 rounded-full px-3 py-2 text-xs pointer-coarse:min-h-10"
+              className="shrink-0 rounded-full px-3 py-2 text-xs pointer-coarse:min-h-11"
               style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
               onClick={onClose}
             >
@@ -68,7 +68,7 @@ export function ImportModal({
             </button>
           </div>
           <p
-            className="shrink-0 text-[12px] leading-relaxed"
+            className="shrink-0 text-xs leading-relaxed"
             style={{ color: "var(--ink-soft)" }}
           >
             {HELPER}
@@ -86,7 +86,7 @@ export function ImportModal({
           />
           <button
             className="mt-3 min-h-11 w-full shrink-0 rounded-xl text-sm text-white transition-opacity hover:opacity-90"
-            style={{ background: "var(--accent)" }}
+            style={{ background: "var(--accent-strong)" }}
             onClick={submit}
           >
             Import
@@ -141,7 +141,7 @@ export function ImportModal({
           </button>
           <button
             className="rounded-lg px-3 py-1.5 text-xs text-white hover:opacity-90"
-            style={{ background: "var(--accent)" }}
+            style={{ background: "var(--accent-strong)" }}
             onClick={submit}
           >
             Import

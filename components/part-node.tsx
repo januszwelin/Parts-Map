@@ -143,12 +143,13 @@ export const PartNode = memo(function PartNode({
           <span
             className="pointer-events-none absolute bottom-1.5 right-2 h-1.5 w-1.5 rounded-full"
             style={{ background: "var(--ink-faint)", opacity: 0.7 }}
-            aria-hidden
+            role="img"
+            aria-label="has a note"
           />
         )}
         {onBackSurface && (
           <span
-            className="pointer-events-none absolute -top-2 right-2 rounded-full px-1.5 text-[9px] tracking-wide"
+            className="pointer-events-none absolute -top-2 right-2 rounded-full px-1.5 text-[10px] tracking-wide"
             style={{
               background: "var(--ink-soft)",
               color: "#fff",

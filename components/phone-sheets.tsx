@@ -60,7 +60,7 @@ export const PATHS = {
 // doneStyle's inline background beats any Tailwind active:bg — press
 // feedback on these is opacity, not a darker wash.
 const doneBtn =
-  "shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10";
+  "shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-11";
 const doneStyle = { background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" } as const;
 const row =
   "flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left text-sm transition-colors hover:bg-black/5 active:bg-black/10 disabled:opacity-40";
@@ -167,7 +167,7 @@ export function RenameSheet({
           />
           <button
             className="shrink-0 rounded-xl px-4 py-2.5 text-sm text-white transition-opacity hover:opacity-90 active:opacity-75"
-            style={{ background: "var(--accent)" }}
+            style={{ background: "var(--accent-strong)" }}
             onClick={() => {
               commit();
               onClose();
@@ -240,6 +240,7 @@ export function CreateSheet({
             className="min-w-0 flex-1 rounded-xl px-3 py-2.5 text-sm outline-none"
             style={{ background: "rgba(255,255,255,0.7)", border: "1px solid var(--line)", color: "var(--ink)" }}
             placeholder="Name a part…"
+            autoComplete="off"
             enterKeyHint="go"
             value={nameValue}
             onChange={(e) => onNameChange(e.target.value)}
@@ -248,7 +249,7 @@ export function CreateSheet({
           <button
             data-tour="create-add"
             className="shrink-0 rounded-xl px-4 py-2.5 text-sm text-white transition-opacity hover:opacity-90 active:opacity-75"
-            style={{ background: "var(--accent)" }}
+            style={{ background: "var(--accent-strong)" }}
             onClick={submit}
           >
             Add
@@ -343,8 +344,9 @@ export function ShareSheet({
     mark("map", ok, ok ? "Exported ✓" : "Couldn't export");
   };
 
-  const label = (base: string, id: string) =>
-    flash?.id === id ? flash.text : base;
+  const label = (base: string, id: string) => (
+    <span aria-live="polite">{flash?.id === id ? flash.text : base}</span>
+  );
   const rowInk = (id: string) =>
     flash?.id === id && !flash.ok
       ? { color: "var(--danger)" }
@@ -516,7 +518,7 @@ export function MoreSheet({
         </button>
         {confirmClear ? (
           <div className="px-2 py-1.5">
-            <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+            <p className="pb-1.5 text-xs" style={{ color: "var(--ink-soft)" }}>
               Clear the whole map? You can undo this.
             </p>
             <div className="flex gap-1.5">
@@ -551,11 +553,11 @@ export function MoreSheet({
             </button>
             {confirmDelete ? (
               <div className="px-2 py-1.5">
-                <p className="pb-1.5 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                <p className="pb-1.5 text-xs" style={{ color: "var(--ink-soft)" }}>
                   Delete your account and all cloud maps?
                 </p>
                 {deleteError && (
-                  <p className="pb-1.5 text-[11px]" style={{ color: "var(--danger)" }}>{deleteError}</p>
+                  <p role="alert" className="pb-1.5 text-xs" style={{ color: "var(--danger)" }}>{deleteError}</p>
                 )}
                 <div className="flex gap-1.5">
                   <button

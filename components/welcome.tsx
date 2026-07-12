@@ -79,7 +79,7 @@ export function WelcomeModal({
           Welcome to Parts Map
         </h2>
         <p
-          className="mt-2 text-[13px] leading-relaxed"
+          className="mt-2 text-sm leading-relaxed"
           style={{ color: "var(--ink-soft)" }}
         >
           A quiet, spatial place for IFS parts work — name a part, place it

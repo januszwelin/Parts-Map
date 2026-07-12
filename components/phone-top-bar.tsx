@@ -74,7 +74,7 @@ export function PhoneTopBar({
   onMore: () => void;
 }) {
   const iconBtn =
-    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10";
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-black/5 active:bg-black/10 pointer-coarse:min-h-11 pointer-coarse:min-w-11";
   // Landscape phones are ≥640px wide — the `sm:hidden` CSS gate alone
   // would swap this bar for the desktop toolbar there, while the sheets
   // (JS-gated on useIsPhone) stay phone-flavored. Keep the CSS default

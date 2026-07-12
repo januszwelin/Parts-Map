@@ -206,7 +206,7 @@ export function MyMapsModal({
           />
           <button
             className="min-h-11 shrink-0 rounded-xl px-4 text-sm text-white transition-opacity hover:opacity-90 active:opacity-75 disabled:opacity-50"
-            style={{ background: "var(--accent)" }}
+            style={{ background: "var(--accent-strong)" }}
             disabled={busyId === "__save__"}
             onClick={saveCurrent}
           >
@@ -239,7 +239,7 @@ export function MyMapsModal({
             >
               {confirmOpen?.id === row.id ? (
                 <div className="flex flex-col gap-2 py-1.5">
-                  <span className="text-[13px]" style={{ color: "var(--ink-soft)" }}>
+                  <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
                     Unsaved changes — open anyway?
                   </span>
                   <div className="flex gap-2">
@@ -262,7 +262,7 @@ export function MyMapsModal({
                 </div>
               ) : confirmDeleteId === row.id ? (
                 <div className="flex flex-col gap-2 py-1.5">
-                  <span className="text-[13px]" style={{ color: "var(--ink-soft)" }}>
+                  <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
                     Delete “{row.title}”?
                   </span>
                   <div className="flex gap-2">
@@ -388,7 +388,7 @@ export function MyMapsModal({
           />
           <button
             className="shrink-0 rounded-lg px-3 py-2 text-xs text-white transition-opacity hover:opacity-90 active:opacity-75 disabled:opacity-50"
-            style={{ background: "var(--accent)" }}
+            style={{ background: "var(--accent-strong)" }}
             disabled={busyId === "__save__"}
             onClick={saveCurrent}
           >

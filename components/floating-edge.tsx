@@ -87,6 +87,7 @@ function ArrowLabelInput({
         border: "1px solid var(--line)",
         color: "var(--ink-soft)",
       }}
+      aria-label="Arrow label"
       placeholder="label — e.g. manages"
       maxLength={40}
       enterKeyHint="done"
@@ -276,7 +277,7 @@ export function FloatingEdge({
                 {confirmDelete ? (
                   <>
                     <span
-                      className="px-1 text-[12px]"
+                      className="px-1 text-xs"
                       style={{ color: "var(--ink-soft)" }}
                     >
                       Delete this arrow?
@@ -284,7 +285,7 @@ export function FloatingEdge({
                     <button
                       aria-label="Confirm delete arrow"
                       onClick={() => api.deleteArrow(id)}
-                      className={`${isPhone ? "min-h-10 px-3.5" : "min-h-8 px-2.5"} rounded-md py-1 text-xs`}
+                      className={`${isPhone ? "min-h-11 px-3.5" : "min-h-8 px-2.5"} rounded-md py-1 text-xs`}
                       style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                     >
                       delete
@@ -292,7 +293,7 @@ export function FloatingEdge({
                     <button
                       aria-label="Cancel delete"
                       onClick={() => setConfirmDelete(false)}
-                      className={`${isPhone ? "min-h-10 px-3.5" : "min-h-8 px-2.5"} rounded-md py-1 text-xs`}
+                      className={`${isPhone ? "min-h-11 px-3.5" : "min-h-8 px-2.5"} rounded-md py-1 text-xs`}
                       style={{ color: "var(--ink-soft)" }}
                     >
                       cancel
@@ -304,7 +305,7 @@ export function FloatingEdge({
                     <button
                       aria-label="Reverse arrow direction"
                       onClick={() => api.reverseArrow(id)}
-                      className={`${isPhone ? "min-h-10 px-3" : "min-h-8 px-2.5"} rounded-md py-1 text-xs hover:bg-black/5`}
+                      className={`${isPhone ? "min-h-11 px-3" : "min-h-8 px-2.5"} rounded-md py-1 text-xs hover:bg-black/5`}
                       style={{ color: "var(--ink-soft)" }}
                     >
                       ⇄ reverse
@@ -312,7 +313,7 @@ export function FloatingEdge({
                     <button
                       aria-label="Delete arrow"
                       onClick={() => setConfirmDelete(true)}
-                      className={`${isPhone ? "min-h-10 px-3.5" : "min-h-8 px-2.5"} rounded-md py-1 text-xs`}
+                      className={`${isPhone ? "min-h-11 px-3.5" : "min-h-8 px-2.5"} rounded-md py-1 text-xs`}
                       style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                     >
                       delete
@@ -378,7 +379,7 @@ export function ArrowEditSheet({
           </span>
           <button
             aria-label="Done editing arrow"
-            className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-10"
+            className="shrink-0 rounded-full px-3 py-2 text-xs transition-opacity active:opacity-70 pointer-coarse:min-h-11"
             style={{ background: "rgba(0,0,0,0.05)", color: "var(--ink-soft)" }}
             onClick={onClose}
           >
@@ -404,20 +405,20 @@ export function ArrowEditSheet({
               {confirmDelete ? (
                 <div className="flex items-center gap-2 px-2.5 py-1.5">
                   <span
-                    className="min-w-0 flex-1 text-[12px]"
+                    className="min-w-0 flex-1 text-xs"
                     style={{ color: "var(--ink-soft)" }}
                   >
                     Delete this arrow?
                   </span>
                   <button
-                    className="min-h-10 rounded-lg px-3.5 py-2 text-xs transition-opacity active:opacity-75"
+                    className="min-h-11 rounded-lg px-3.5 py-2 text-xs transition-opacity active:opacity-75"
                     style={{ color: "var(--danger)", background: "var(--danger-bg)" }}
                     onClick={() => api.deleteArrow(arrow.id)}
                   >
                     delete
                   </button>
                   <button
-                    className="min-h-10 rounded-lg px-3.5 py-2 text-xs active:bg-black/10"
+                    className="min-h-11 rounded-lg px-3.5 py-2 text-xs active:bg-black/10"
                     style={{ color: "var(--ink-soft)" }}
                     onClick={() => setConfirmDelete(false)}
                   >

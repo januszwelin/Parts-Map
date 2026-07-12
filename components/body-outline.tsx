@@ -67,8 +67,9 @@ const BodyArt = React.memo(function BodyArt({ back }: { back?: boolean }) {
 
 /** One body centered at flow 0,0 — the surface `view` selects. Both
  *  surfaces are mounted stacked and cross-faded on a flip (the outline is
- *  nearly identical mirrored, so mostly the spine/blade detail + caption
- *  swap). A quiet caption sits underneath. */
+ *  nearly identical mirrored, so mostly the spine/blade detail swaps).
+ *  The caption underneath is interactive now and lives in
+ *  figure-caption.tsx. */
 export function BodyOutline({
   bodyScale,
   view,
@@ -79,18 +80,6 @@ export function BodyOutline({
   const reduced = useReducedMotion();
   const w = BODY_W * bodyScale;
   const h = BODY_H * bodyScale;
-  const caption: React.CSSProperties = {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    right: 0,
-    marginTop: 20 * bodyScale,
-    textAlign: "center",
-    fontSize: Math.max(11, 14 * bodyScale),
-    letterSpacing: "0.16em",
-    textTransform: "uppercase",
-    color: "var(--ink-faint)",
-  };
   const layer = (depth: Depth) => (
     <div
       key={depth}
@@ -103,7 +92,6 @@ export function BodyOutline({
       aria-hidden
     >
       <BodyArt back={depth === "back"} />
-      <div style={caption}>{depth}</div>
     </div>
   );
   return (

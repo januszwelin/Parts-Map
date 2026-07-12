@@ -111,7 +111,7 @@ export function PhoneQuickTools({
         className={iconBtn}
         style={
           listOpen
-            ? { color: "#fff", background: "var(--accent)" }
+            ? { color: "#fff", background: "var(--accent-strong)" }
             : { color: "var(--ink-soft)" }
         }
         onClick={onToggleList}
@@ -122,7 +122,7 @@ export function PhoneQuickTools({
         data-tour="add"
         aria-label="Add a part"
         className="ml-0.5 flex h-11 w-11 items-center justify-center rounded-full text-white transition-opacity hover:opacity-90 active:opacity-75"
-        style={{ background: "var(--accent)" }}
+        style={{ background: "var(--accent-strong)" }}
         onClick={onAdd}
       >
         <PlusIcon />

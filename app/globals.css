@@ -15,7 +15,14 @@
   --ink-faint: #746e64;
   --line: #e4e0d8;
   --panel: rgba(253, 252, 250, 0.92);
-  --accent: #7d8b74; /* muted sage — indicator / focus */
+  --accent: #7d8b74; /* muted sage — indicator / focus (thin graphics: 3:1 ok) */
+  /* Solid fills that carry WHITE text (Add / Save / Import / avatar) need
+     4.5:1, but white on --accent is only ~3.61:1 — a WCAG AA fail on every
+     primary button. This is the lightest sage still clearing 4.5:1 on white
+     (~4.63:1 measured), so the CTAs darken barely perceptibly while the
+     indicator/motion sage above is untouched. Same split as --danger /
+     --danger-bg: one hue, two AA-correct roles. */
+  --accent-strong: #6b7962;
   /* Delete/danger red — was a literal #A05B5B duplicated across a dozen
      inline styles (part editor, arrow popover, my-maps, toolbar, sign-in),
      which is how the tinted-background case quietly drifted under AA
