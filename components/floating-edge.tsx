@@ -266,6 +266,12 @@ export function FloatingEdge({
             style={{
               transform: `translate(-50%, -50%) translate(${labelX + clamp.dx}px, ${labelY + clamp.dy}px)`,
               pointerEvents: "all",
+              // The label PILL stays under cards (the node layer paints
+              // above the edge-label layer, deliberately) — but the
+              // expanded POPOVER must rise above them: a card next to a
+              // short arrow otherwise covers the popover and swallows its
+              // clicks. 1001 clears RF's elevated selected-node z-index.
+              zIndex: selected && data?.solo && !isPhone ? 1001 : undefined,
             }}
           >
             {selected && data?.solo && !isPhone ? (

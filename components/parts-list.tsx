@@ -701,7 +701,11 @@ function ListOptions({
   ];
   return (
     <div className="flex-1 overflow-y-auto overscroll-contain">
-      <div className="flex items-center gap-2 pb-1.5">
+      {/* data-tour anchors the guided tour's list step here once the ⋯
+          button has swapped this page in — its "‹ back when you're done"
+          prompt points at this header, and the tour lock keeps ‹ back (and
+          dismissing the sheet) the only live targets. */}
+      <div data-tour="list-options" className="flex items-center gap-2 pb-1.5">
         <button
           aria-label="Back to the list"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base transition-opacity active:opacity-70 pointer-coarse:min-h-11 pointer-coarse:min-w-11"

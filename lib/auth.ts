@@ -12,6 +12,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
+import { sendPasswordResetEmail } from "@/lib/email";
 
 /* The session secret signs cookies and CSRF tokens. Without it better-auth
    falls back to an insecure dev default — fine locally, catastrophic in
@@ -36,12 +37,11 @@ export const auth = betterAuth({
   ...(baseURL ? { baseURL, trustedOrigins: [baseURL] } : {}),
   emailAndPassword: {
     enabled: true,
-    // No transactional-email provider is wired up yet — this logs the reset
-    // link server-side so the flow is fully testable locally, but it MUST
-    // be replaced with a real send (Resend/Postmark/SES/etc.) before this
-    // ships to real users, or nobody actually receives their reset link.
+    // Delivery lives behind lib/email.ts: Resend when RESEND_API_KEY +
+    // EMAIL_FROM are set, otherwise a server-side console.log of the link
+    // so the flow stays fully testable locally with zero setup.
     sendResetPassword: async ({ user, url }) => {
-      console.log(`[auth] Password reset for ${user.email}: ${url}`);
+      await sendPasswordResetEmail({ to: user.email, url });
     },
   },
   user: {

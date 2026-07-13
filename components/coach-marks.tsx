@@ -35,6 +35,11 @@ export type TourSnapshot = {
   selectedId: string | null;
   listOpen: boolean;
   exportMenuOpen: boolean;
+  /** The share/export options page has been opened at least once during
+   *  this tour — the phone list step waits for the user to open the options
+   *  AND then close them again before advancing (so the options are
+   *  actually seen, not torn away the instant ⋯ is tapped). */
+  exportMenuSeen: boolean;
   framedTick: number;
   /** The phone Create sheet is up — the locked phone tour's add steps
    *  complete when it opens, and its name steps live inside it. */
@@ -235,18 +240,32 @@ export const PHONE_TOUR_STEPS: TourStep[] = [
     scrollWithin: () => ['[data-tour="edit-sheet"]'],
   },
   {
+    // Three phases in one step: open the list (☰) → open the options (⋯) →
+    // look them over and close. It completes only once the options have
+    // been opened AND closed again (‹ back or dismissing the sheet), so the
+    // share/export page is actually seen instead of being torn away the
+    // instant ⋯ is tapped.
     id: "list",
-    anchor: (s) => (s.listOpen ? "export-menu" : "list"),
+    anchor: (s) =>
+      !s.listOpen
+        ? "list"
+        : s.exportMenuOpen
+          ? "list-options"
+          : "export-menu",
     sheet: (s) => (s.listOpen ? "list" : null),
     text: (s) =>
-      s.listOpen
-        ? "Tap ⋯ for share & export options."
-        : "Your parts also live in the list — open it with ☰.",
-    done: (s) => s.exportMenuOpen,
+      !s.listOpen
+        ? "Your parts also live in the list — open it with ☰."
+        : s.exportMenuOpen
+          ? "Share as text, or export an image — tap ‹ back when you're done."
+          : "Tap ⋯ for share & export options.",
+    done: (s) => s.exportMenuSeen && !s.exportMenuOpen,
     allow: (s) =>
-      s.listOpen
-        ? ['[data-tour="export-menu"]', "[data-sheet-dismiss]"]
-        : ['[data-tour="list"]'],
+      !s.listOpen
+        ? ['[data-tour="list"]']
+        : s.exportMenuOpen
+          ? ['[data-tour="list-options"]', "[data-sheet-dismiss]"]
+          : ['[data-tour="export-menu"]', "[data-sheet-dismiss]"],
   },
   {
     id: "frame",
@@ -380,12 +399,30 @@ export function CoachMarks({
   // The anchor sits in the screen's bottom half (phone toolbar, frame-map
   // button, …) → put the callout above it, arrow pointing down at it.
   // Otherwise the callout goes below the anchor, arrow pointing up.
-  const calloutAbove =
+  let calloutAbove =
     !!anchorKey && ALWAYS_ABOVE.has(anchorKey)
       ? true
       : rect
         ? rect.top >= winH / 2
         : false;
+  // Vertical fit: there's no vertical clamp on `top` below, so a preferred
+  // side with too little room runs the bubble off the top/bottom edge (the
+  // ALWAYS_ABOVE export-menu ⋯ sits ~76px from the top on desktop → its
+  // forced-above callout was clipping behind the browser chrome). Flip to
+  // the other side only when the preferred one can't fit AND the other can
+  // — clamping by a conservative height constant, same no-measure approach
+  // as the horizontal half-width clamp (a measured height lags a render).
+  const GAP = 10;
+  const EST_H = 180; // upper bound: text + progress dots + Skip row
+  if (rect) {
+    const roomAbove = rect.top - GAP;
+    const roomBelow = winH - rect.bottom - GAP;
+    if (calloutAbove && roomAbove < EST_H && roomBelow >= EST_H) {
+      calloutAbove = false;
+    } else if (!calloutAbove && roomBelow < EST_H && roomAbove >= EST_H) {
+      calloutAbove = true;
+    }
+  }
   // Keep the bubble fully on-screen: clamp its center by its MAX half-width
   // (max-w below is min(20rem, 86vw), so this is a known constant — a
   // measured width would lag a render behind and let a corner anchor pull

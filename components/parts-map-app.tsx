@@ -349,6 +349,14 @@ function PartsMapApp() {
      seen the welcome" boolean — no map data is ever stored (lib/onboarding.ts). */
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  // The options page has been opened at least once (see TourSnapshot).
+  // The phone list step waits for open-then-close before advancing; this
+  // flips true whenever the options open and resets when a tour starts.
+  const [exportMenuSeen, setExportMenuSeen] = useState(false);
+  const handleExportMenuOpenChange = useCallback((open: boolean) => {
+    setExportMenuOpen(open);
+    if (open) setExportMenuSeen(true);
+  }, []);
   const [framedTick, setFramedTick] = useState(0);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const tourBaselineRef = useRef<TourSnapshot | null>(null);
@@ -410,6 +418,7 @@ function PartsMapApp() {
         setExportMenuOpen(false);
         setNotice(null);
       }
+      setExportMenuSeen(false);
       tourBaselineRef.current = {
         partsCount: counts?.parts ?? partsRef.current.length,
         arrowsCount: counts?.arrows ?? arrowsRef.current.length,
@@ -420,6 +429,7 @@ function PartsMapApp() {
         selectedId: phone ? null : selectedId,
         listOpen: phone ? false : listOpen,
         exportMenuOpen: phone ? false : exportMenuOpen,
+        exportMenuSeen: false,
         createSheetOpen: false,
         framedTick,
         isPhone: phone,
@@ -460,25 +470,37 @@ function PartsMapApp() {
       selectedId,
       listOpen,
       exportMenuOpen,
+      exportMenuSeen,
       createSheetOpen: phoneSheet === "create",
       framedTick,
       isPhone,
     }),
-    [parts.length, arrows.length, onBodyCount, lastAddedId, selectedId, listOpen, exportMenuOpen, phoneSheet, framedTick, isPhone],
+    [parts.length, arrows.length, onBodyCount, lastAddedId, selectedId, listOpen, exportMenuOpen, exportMenuSeen, phoneSheet, framedTick, isPhone],
   );
   // (The advance effect lives further down, after fitAll/revealPart exist —
   // its auto-choreography drives them between steps.)
   const tourSteps = tourMode === "phone" ? PHONE_TOUR_STEPS : TOUR_STEPS;
   const tourStepDef = tourStep !== null ? tourSteps[tourStep] : null;
   const tourStepId = tourStepDef?.id ?? null;
-  /** The locked guided flow is running — gates for systems that must not
-   *  move the stage or accept hardware input under it (auto-space, RF
-   *  delete key, wheel zoom, undo/redo). Ref twin for timer callbacks. */
+  /** The locked guided flow is running — gates the phone-only capture-phase
+   *  pointer guard (useTourLock; desktop steps carry no `allow` lists, so it
+   *  can't run there without blocking the tour's own taps). Ref twin for
+   *  timer callbacks. */
   const tourLocked = tourMode === "phone" && tourStep !== null;
   const tourLockedRef = useRef(false);
   useEffect(() => {
     tourLockedRef.current = tourLocked;
   }, [tourLocked]);
+  /** Any tour is running (phone OR desktop) — gates the systems that must
+   *  not move or mutate the stage under a tour (canvas pan/zoom, RF delete
+   *  key, wheel zoom, view flip, auto-space, undo/redo). These never block
+   *  node dragging or selection, so the desktop place/edit/link steps still
+   *  work. On phone this equals tourLocked, so no behaviour changes there. */
+  const tourActive = tourStep !== null;
+  const tourActiveRef = useRef(false);
+  useEffect(() => {
+    tourActiveRef.current = tourActive;
+  }, [tourActive]);
   /** Which phone surface currently covers the stage (one at a time by
    *  policy). Steps that live inside a sheet name it via `sheet()`; their
    *  callouts show only while that sheet is the covering surface. */
@@ -2968,11 +2990,11 @@ function PartsMapApp() {
           t.isContentEditable);
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
-      // The locked tour swallows hardware undo/redo — a Ctrl+Z would
+      // Any running tour swallows hardware undo/redo — a Ctrl+Z would
       // silently unwind the very placement the step just taught. Escape
       // stays live below: its consequences (sheet close, deselect) are
       // absorbed by the tour's regress / auto-reselect rules by design.
-      if (tourLockedRef.current && mod && (key === "z" || key === "y")) {
+      if (tourActiveRef.current && mod && (key === "z" || key === "y")) {
         e.preventDefault();
         return;
       }
@@ -3017,15 +3039,15 @@ function PartsMapApp() {
       }
       // "f" flips the shown surface — the figure caption scrolls with the
       // scene, so the keyboard covers the moments its seat is off-screen.
-      // Locked tour excluded: a mid-step flip would slide the spotlighted
-      // card into a park lane (same reasoning as the undo/redo swallow).
+      // Any running tour excluded: a mid-step flip would slide the
+      // spotlighted card into a park lane (same reasoning as undo/redo).
       if (
         key === "f" &&
         !mod &&
         !e.altKey &&
         !isPhoneRef.current &&
         !liftInfoRef.current &&
-        !tourLockedRef.current
+        !tourActiveRef.current
       ) {
         e.preventDefault();
         flipView(viewRef.current === "front" ? "back" : "front");
@@ -3061,17 +3083,17 @@ function PartsMapApp() {
     // unmeasured nodes still covers the brief pre-measure window.
     if (!autoScale || !autoArmedRef.current) return;
     if (lift || dragOverride || settlingRef.current) return;
-    // The locked phone tour owns the stage: a mid-tour rescale would slide
-    // the spotlighted card out from under its ring, and the pill's Undo is
-    // tappable through the lock. Skip (armed state survives) — the pass
-    // resumes on the first mutation after the tour.
-    if (tourLockedRef.current) return;
+    // Any running tour owns the stage: a mid-tour rescale would slide the
+    // spotlighted card out from under its ring (and on phone the pill's Undo
+    // is tappable through the capture-phase lock). Skip (armed state
+    // survives) — the pass resumes on the first mutation after the tour.
+    if (tourActiveRef.current) return;
     const timer = setTimeout(() => {
       if (
         !autoArmedRef.current ||
         liftInfoRef.current ||
         settlingRef.current ||
-        tourLockedRef.current
+        tourActiveRef.current
       ) {
         return;
       }
@@ -3383,20 +3405,27 @@ function PartsMapApp() {
           // Desktop is pointer-first (Miro web): bare left-drag on empty
           // canvas draws a marquee; hold Space (RF's default
           // panActivationKeyCode) or middle/right-drag to pan. Phones keep
-          // one-finger-pan untouched.
-          panOnDrag={isPhone ? true : DESKTOP_PAN_BUTTONS}
-          selectionOnDrag={!isPhone && !tourLocked}
+          // one-finger-pan untouched. A running tour (either layout) freezes
+          // the stage: no pan/marquee, so a spotlighted anchor can't drift.
+          panOnDrag={isPhone ? true : tourActive ? false : DESKTOP_PAN_BUTTONS}
+          selectionOnDrag={!isPhone && !tourActive}
           selectionMode={SelectionMode.Partial}
-          // The locked tour's guard gates pointers; these two close the
-          // hardware side: Delete could strand the link step below two
-          // parts (the delete BUTTON is denied, the key wasn't), and a
-          // scroll wheel would zoom the stage out from under a spotlight.
-          deleteKeyCode={tourLocked ? null : ["Backspace", "Delete"]}
-          zoomOnScroll={!tourLocked}
+          // A running tour closes every hardware pathway that would move or
+          // mutate the stage out from under a spotlight (both layouts):
+          // Delete could strand the link step below two parts (the delete
+          // BUTTON is denied on phone, but the key wasn't); the scroll wheel,
+          // hold-Space pan, Ctrl/Cmd+wheel zoom and trackpad pinch would all
+          // shift or scale the canvas mid-instruction. `undefined` restores
+          // RF's own defaults ("Space" / Ctrl+Meta) when no tour is running.
+          deleteKeyCode={tourActive ? null : ["Backspace", "Delete"]}
+          zoomOnScroll={!tourActive}
+          zoomOnPinch={!tourActive}
+          panActivationKeyCode={tourActive ? null : undefined}
+          zoomActivationKeyCode={tourActive ? null : undefined}
           // Settings pref (desktop): wheel pans, Ctrl/Cmd+wheel zooms
           // (RF's zoomActivationKeyCode default), trackpad pinch still
           // zooms. When off, the wheel zooms as before.
-          panOnScroll={!isPhone && scrollPan && !tourLocked}
+          panOnScroll={!isPhone && scrollPan && !tourActive}
           // The floating frame-map button owns the bottom-right corner.
           attributionPosition="bottom-left"
           // Off-screen cards/arrows skip rendering entirely — relevant once
@@ -3562,7 +3591,7 @@ function PartsMapApp() {
               setListOpen(false);
               setListSearchFocus(false);
             }}
-            onExportMenuOpenChange={setExportMenuOpen}
+            onExportMenuOpenChange={handleExportMenuOpenChange}
           />
         ) : (
           <PartsListPanel
@@ -3575,7 +3604,7 @@ function PartsMapApp() {
             onSelect={setSelectedId}
             onReveal={revealPart}
             onClose={() => setListOpen(false)}
-            onExportMenuOpenChange={setExportMenuOpen}
+            onExportMenuOpenChange={handleExportMenuOpenChange}
             onNotice={(text) => setNotice({ text, key: noticeKey() })}
             onSaveJson={onSave}
             onLoadJson={onLoad}
